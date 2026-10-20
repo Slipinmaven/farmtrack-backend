@@ -1,9 +1,8 @@
-import os
-from logging.config import fileConfig
 import asyncio
+from logging.config import fileConfig
 
 from sqlalchemy import pool
-from sqlalchemy.ext.asyncio import async_engine_from_config
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from alembic import context
 
@@ -13,12 +12,6 @@ import app.models  # Register mapped classes on Base.metadata.
 
 
 config = context.config
-
-config.set_main_option(
-    "sqlalchemy.url",
-    settings.database_url.replace("%", "%%"),
-)
-
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
@@ -54,9 +47,8 @@ def do_run_migrations(connection) -> None:
 
 
 async def run_async_migrations() -> None:
-    connectable = async_engine_from_config(
-        config.get_section(config.config_ini_section, {}),
-        prefix="sqlalchemy.",
+    connectable = create_async_engine(
+        settings.database_url,
         poolclass=pool.NullPool,
     )
 
