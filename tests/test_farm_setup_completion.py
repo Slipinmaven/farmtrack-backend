@@ -38,6 +38,9 @@ class FakeRepository:
         self.updated.append(item)
         return item
 
+    async def get_farm_settings(self, farm_id):
+        return self.items[0] if self.items else None
+
 
 class FakeActivityService:
     async def record(self, **kwargs):
@@ -115,3 +118,34 @@ async def test_complete_setup_persists_completion_after_required_setup():
     assert farm.setup_completed_at is not None
     assert response.setup_completed_at == farm.setup_completed_at
     assert farm_repository.updated == [farm]
+
+
+@pytest.mark.asyncio
+async def test_complete_setup_returns_settings_without_lazy_loading_farm_relationship():
+    service, farm, _ = make_service(
+        chicken_products=[
+            SimpleNamespace(is_active=True, product_type=ProductType.CHICKENS)
+        ],
+        blocks=[SimpleNamespace(is_active=True)],
+    )
+    now = datetime.now(timezone.utc)
+    settings = SimpleNamespace(
+        id=uuid4(),
+        farm_id=farm.id,
+        primary_color="#226B68",
+        secondary_color="#BF6C52",
+        font_family=None,
+        font_scale=None,
+        theme_mode="system",
+        logo_path=None,
+        currency="KES",
+        timezone="Africa/Nairobi",
+        created_at=now,
+        updated_at=now,
+    )
+    service.farm_settings_repository.items = [settings]
+
+    response = await service.complete_setup(farm)
+
+    assert response.settings is not None
+    assert response.settings.id == settings.id

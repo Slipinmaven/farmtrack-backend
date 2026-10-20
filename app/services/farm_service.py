@@ -350,6 +350,28 @@ class FarmService:
                         "farm_name": farm.name,
                     },
                 )
-            response = FarmResponse.model_validate(farm)
+            settings = await self.farm_settings_repository.get_farm_settings(farm.id)
+            response = FarmResponse(
+                id=farm.id,
+                owner_id=farm.owner_id,
+                name=farm.name,
+                description=farm.description,
+                location=farm.location,
+                phone_number=farm.phone_number,
+                email=farm.email,
+                maximum_chicken_capacity=farm.maximum_chicken_capacity,
+                is_active=farm.is_active,
+                setup_completed_at=farm.setup_completed_at,
+                created_at=farm.created_at,
+                updated_at=farm.updated_at,
+                settings=(
+                    FarmSettingsResponse.model_validate(
+                        settings,
+                        from_attributes=True,
+                    )
+                    if settings is not None
+                    else None
+                ),
+            )
             await self.unit_of_work.commit()
             return response
