@@ -1,4 +1,6 @@
 
+from datetime import datetime, timezone
+
 from sqlalchemy.exc import IntegrityError
 
 from app.repositories.farm_repository import FarmRepository
@@ -14,10 +16,12 @@ from app.schemas.farm import (
     FarmUpdateRequest,
 )
 from app.repositories.farm_settings_repository import FarmSettingsRepository
+from app.repositories.product_repository import ProductRepository
+from app.repositories.block_repository import BlockRepository
 from app.core.logging import get_application_logger
 from app.core.defaults import DEFAULT_FARM_SETTINGS
 from app.models.user import User
-from app.schemas.enums import ActivityEntityType, ActivityType
+from app.schemas.enums import ActivityEntityType, ActivityType, ProductType
 from app.services.activity_service import ActivityService
 from app.services.activity_details import activity_field_changes
 
@@ -46,12 +50,16 @@ class FarmService:
             farm_repository: FarmRepository,
             farm_settings_repository: FarmSettingsRepository,
             activity_service: ActivityService,
-            unit_of_work: UnitOfWork
+            unit_of_work: UnitOfWork,
+            product_repository: ProductRepository | None = None,
+            block_repository: BlockRepository | None = None,
         ):
         self.farm_repository = farm_repository
         self.farm_settings_repository = farm_settings_repository
         self.activity_service = activity_service
         self.unit_of_work = unit_of_work
+        self.product_repository = product_repository
+        self.block_repository = block_repository
 
     async def get_user_farms(self, user: User, search: str | None = None, is_active: bool | None = None) -> list[Farm]:
         async with self.unit_of_work:
@@ -105,6 +113,7 @@ class FarmService:
                     email=farm.email,
                     maximum_chicken_capacity=farm.maximum_chicken_capacity,
                     is_active=farm.is_active,
+                    setup_completed_at=farm.setup_completed_at,
                     created_at=farm.created_at,
                     updated_at=farm.updated_at,
                     settings=(
@@ -213,6 +222,7 @@ class FarmService:
                 email=farm.email,
                 maximum_chicken_capacity=farm.maximum_chicken_capacity,
                 is_active=farm.is_active,
+                setup_completed_at=farm.setup_completed_at,
                 created_at=farm.created_at,
                 updated_at=farm.updated_at,
                 settings=(
@@ -302,3 +312,44 @@ class FarmService:
             if _is_farm_name_conflict(exc):
                 raise ConflictError("A farm with this name already exists for your account.") from exc
             raise
+
+    async def complete_setup(self, farm: Farm) -> FarmResponse:
+        if self.product_repository is None or self.block_repository is None:
+            raise RuntimeError("Farm setup repositories are not configured.")
+
+        async with self.unit_of_work:
+            active_chicken_products = [
+                product
+                for product in await self.product_repository.list_by_farm(farm.id)
+                if product.is_active and product.product_type == ProductType.CHICKENS
+            ]
+            active_blocks = await self.block_repository.list_by_farm(
+                farm.id,
+                is_active=True,
+            )
+            if not active_chicken_products:
+                raise ConflictError(
+                    "Add at least one active chicken product before finishing farm setup."
+                )
+            if not active_blocks:
+                raise ConflictError(
+                    "Add at least one active housing block before finishing farm setup."
+                )
+
+            if farm.setup_completed_at is None:
+                farm.setup_completed_at = datetime.now(timezone.utc)
+                await self.farm_repository.update(farm)
+                await self.activity_service.record(
+                    farm_id=farm.id,
+                    user_id=farm.owner_id,
+                    activity_type=ActivityType.FARM_UPDATED,
+                    entity_type=ActivityEntityType.FARM,
+                    entity_id=farm.id,
+                    details={
+                        "action": "initial_setup_completed",
+                        "farm_name": farm.name,
+                    },
+                )
+            response = FarmResponse.model_validate(farm)
+            await self.unit_of_work.commit()
+            return response

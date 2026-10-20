@@ -26,6 +26,7 @@ class FarmResponse(BaseModel):
     email: str | None
     maximum_chicken_capacity: int | None
     is_active: bool
+    setup_completed_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
     settings: FarmSettingsResponse | None = Field(

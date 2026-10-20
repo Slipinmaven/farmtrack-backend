@@ -67,6 +67,14 @@ async def update_farm(
     )
 
 
+@router.post("/{farm_id}/setup/complete", response_model=FarmResponse)
+async def complete_farm_setup(
+    farm: Farm = Depends(get_owned_farm),
+    service: FarmService = Depends(get_farm_service),
+) -> FarmResponse:
+    return await service.complete_setup(farm)
+
+
 @router.patch("/{farm_id}/settings", response_model=FarmSettingsResponse)
 async def update_farm_settings(
     request: FarmSettingsUpdate,

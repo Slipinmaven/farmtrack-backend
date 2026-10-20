@@ -202,6 +202,8 @@ def get_farm_service(
         farm_settings_repository=FarmSettingsRepository(session=session),
         activity_service=activity_service,
         unit_of_work=unit_of_work,
+        product_repository=ProductRepository(session=session),
+        block_repository=BlockRepository(session=session),
 )
 
 
