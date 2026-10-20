@@ -45,8 +45,8 @@ class EggCollection(Base):
     product_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("products.id"), nullable=False
     )
-    block_id: Mapped[UUID] = mapped_column(
-        Uuid(as_uuid=True), ForeignKey("blocks.id"), nullable=False
+    block_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("blocks.id"), nullable=True
     )
     quantity: Mapped[Decimal] = mapped_column(Numeric(12, 3), nullable=False)
     unit_id: Mapped[UUID] = mapped_column(

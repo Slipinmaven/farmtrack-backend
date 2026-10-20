@@ -58,7 +58,7 @@ class EggCollectionResponse(BaseModel):
     id: UUID
     farm_id: UUID
     product_id: UUID
-    block_id: UUID
+    block_id: UUID | None
     quantity: Decimal
     unit_id: UUID
     conversion_factor: Decimal

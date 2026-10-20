@@ -289,7 +289,6 @@ class InventoryOpeningSetupService:
                 "Opening egg stock is only available before any egg collections exist."
             )
         products = {}
-        blocks = {}
         units = {}
         records = []
         collected_at = datetime.combine(
@@ -320,21 +319,6 @@ class InventoryOpeningSetupService:
                     )
                 products[item.product_id] = product
 
-            block = blocks.get(item.block_id)
-            if block is None:
-                block = await self.block_repository.get_by_id_for_update(
-                    farm.id, item.block_id
-                )
-                if block is None:
-                    raise ResourceNotFoundError(
-                        f"Housing block '{item.block_id}' not found for this farm."
-                    )
-                if not block.is_active:
-                    raise ConflictError(
-                        f"Opening eggs cannot be assigned to inactive block '{block.name}'."
-                    )
-                blocks[item.block_id] = block
-
             unit_key = (item.product_id, item.unit_id)
             product_unit = units.get(unit_key)
             if product_unit is None:
@@ -352,7 +336,7 @@ class InventoryOpeningSetupService:
             records.append(
                 {
                     "product_id": product.id,
-                    "block_id": block.id,
+                    "block_id": item.block_id,
                     "quantity": item.quantity,
                     "unit_id": product_unit.unit_id,
                     "conversion_factor": product_unit.conversion_factor,

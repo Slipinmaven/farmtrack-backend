@@ -195,7 +195,6 @@ class InventoryOpeningSetupServiceTests(unittest.IsolatedAsyncioTestCase):
             egg_stock=[
                 {
                     "product_id": str(self.product_id),
-                    "block_id": str(self.block_id),
                     "unit_id": str(self.unit_id),
                     "quantity": "2",
                 }
@@ -206,6 +205,7 @@ class InventoryOpeningSetupServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.record_count, 1)
         self.assertEqual(self.collections[0].entry_type, "opening_stock")
+        self.assertIsNone(self.collections[0].block_id)
         self.inventory_service.append_movement.assert_awaited_once()
         movement = self.inventory_service.append_movement.await_args.kwargs
         self.assertEqual(movement["quantity_delta"], Decimal("60.000"))
@@ -214,6 +214,56 @@ class InventoryOpeningSetupServiceTests(unittest.IsolatedAsyncioTestCase):
             InventoryMovementType.OPENING_BALANCE,
         )
         self.assertEqual(movement["source_type"], "egg_collection")
+
+    async def test_egg_opening_stock_supports_multiple_units_without_a_block(self):
+        base_unit_id = uuid4()
+        unit_by_id = {
+            self.unit_id: self.product_unit,
+            base_unit_id: SimpleNamespace(
+                unit_id=base_unit_id,
+                conversion_factor=Decimal("1"),
+            ),
+        }
+        self.product_unit_repository.get_by_product_and_unit = AsyncMock(
+            side_effect=lambda _product_id, unit_id: unit_by_id[unit_id]
+        )
+        request = self.request(
+            "eggs",
+            egg_stock=[
+                {
+                    "product_id": str(self.product_id),
+                    "unit_id": str(self.unit_id),
+                    "quantity": "2",
+                    "unit_cost": "600",
+                },
+                {
+                    "product_id": str(self.product_id),
+                    "unit_id": str(base_unit_id),
+                    "quantity": "5",
+                    "unit_cost": "10",
+                },
+            ],
+        )
+
+        result = await self.service.create(self.farm, request)
+
+        self.assertEqual(result.record_count, 2)
+        self.assertEqual(len(self.collections), 2)
+        self.assertTrue(all(item.block_id is None for item in self.collections))
+        self.assertEqual(
+            [
+                call.kwargs["quantity_delta"]
+                for call in self.inventory_service.append_movement.await_args_list
+            ],
+            [Decimal("60.000"), Decimal("5.000")],
+        )
+        self.assertEqual(
+            [
+                call.kwargs["unit_cost"]
+                for call in self.inventory_service.append_movement.await_args_list
+            ],
+            [Decimal("20"), Decimal("10")],
+        )
 
     async def test_existing_setup_cannot_be_recorded_again(self):
         self.setup_repository.get_for_species = AsyncMock(

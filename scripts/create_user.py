@@ -1,10 +1,15 @@
 import argparse
 import asyncio
 from getpass import getpass
+from pathlib import Path
+import sys
 from uuid import UUID
 
 from pydantic import EmailStr, TypeAdapter, ValidationError
 from sqlalchemy.exc import IntegrityError
+
+# Make direct execution from the backend root resolve the application package.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.core.database import async_session_factory, dispose_database_engine
 from app.core.unit_of_work import UnitOfWork

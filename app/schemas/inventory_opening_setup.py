@@ -41,7 +41,7 @@ class OpeningEggStockRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     product_id: UUID
-    block_id: UUID
+    block_id: UUID | None = None
     unit_id: UUID
     quantity: Decimal = Field(gt=0, max_digits=12, decimal_places=3)
     unit_cost: Decimal | None = Field(
