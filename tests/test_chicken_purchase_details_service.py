@@ -23,6 +23,7 @@ from app.repositories.transaction_repository import TransactionRepository
 from app.schemas.enums import (
     ChickenType,
     PaymentMethod,
+    ProductType,
     TransactionStatus,
     TransactionType,
 )
@@ -63,7 +64,10 @@ class ChickenPurchaseDetailsServiceTests(unittest.IsolatedAsyncioTestCase):
             created_at=now,
             product_id=uuid4(),
             unit_id=uuid4(),
-            product=SimpleNamespace(name="Pullets"),
+            product=SimpleNamespace(
+                name="Pullets",
+                product_type=ProductType.CHICKENS,
+            ),
             unit=SimpleNamespace(name="each"),
             quantity=Decimal("10"),
             conversion_factor=Decimal("1"),
@@ -209,6 +213,10 @@ class ChickenPurchaseDetailsServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.transaction.items[0].quantity_received, Decimal("4"))
         self.assertEqual(response.transaction.items[0].quantity_remaining, Decimal("6"))
         self.assertEqual(response.transaction.items[0].product_name, "Pullets")
+        self.assertEqual(
+            response.transaction.items[0].product_type,
+            ProductType.CHICKENS,
+        )
         self.assertEqual(response.receipts[0].items[0].batch_name, "Layer group 1")
         self.assertEqual(
             response.receipts[0].items[0].block_allocations[0].block_name,

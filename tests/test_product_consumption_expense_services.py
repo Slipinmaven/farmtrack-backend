@@ -39,6 +39,9 @@ class FakeUnitOfWork:
     async def __aexit__(self, exc_type, exc_value, traceback):
         return False
 
+    async def flush(self):
+        pass
+
     async def commit(self):
         pass
 
@@ -609,6 +612,27 @@ class ProductConsumptionExpenseServiceTests(unittest.IsolatedAsyncioTestCase):
                 ExpenseUpdateRequest(notes="Manual update"),
             )
 
+    async def test_expense_update_returns_updated_response(self):
+        created = await self.expense_service.create_expense(
+            self.farm,
+            self._expense_request(),
+        )
+
+        updated = await self.expense_service.update_expense(
+            self.farm,
+            created.id,
+            ExpenseUpdateRequest(
+                name="Updated feed delivery",
+                amount=Decimal("1300.00"),
+                notes="Corrected invoice total",
+            ),
+        )
+
+        self.assertEqual(updated.name, "Updated feed delivery")
+        self.assertEqual(updated.amount, Decimal("1300.00"))
+        self.assertEqual(updated.balance_due, Decimal("49.50"))
+        self.assertEqual(updated.notes, "Corrected invoice total")
+
     async def test_expense_rejects_contact_from_another_farm(self):
         self.contact.farm_id = uuid4()
         with self.assertRaises(ResourceNotFoundError):
@@ -801,6 +825,34 @@ class ProductConsumptionExpenseServiceTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ExpenseRepositoryTests(unittest.IsolatedAsyncioTestCase):
+    def test_expense_response_uses_purchased_product_name(self):
+        now = datetime.now(timezone.utc)
+        expense = SimpleNamespace(
+            id=uuid4(),
+            farm_id=uuid4(),
+            name="Equipment",
+            category="equipment",
+            amount=Decimal("100.00"),
+            expense_date=date(2026, 10, 20),
+            contact_id=None,
+            contact=None,
+            block_id=None,
+            block=None,
+            purchase_transaction_id=uuid4(),
+            purchase_transaction=SimpleNamespace(reference_number="PUR-123"),
+            receipt_reference=None,
+            notes="Supplier note\nPurchased products: Egg trays",
+            payments=[],
+            canceled_at=None,
+            cancellation_reason=None,
+            created_at=now,
+            updated_at=now,
+        )
+
+        response = ExpenseService._to_response(expense, "Equipment")
+
+        self.assertEqual(response.name, "Egg trays")
+
     async def test_new_expense_payment_collection_is_loaded_before_append(self):
         class FakeSession:
             def add(self, instance):

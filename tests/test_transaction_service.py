@@ -369,6 +369,7 @@ class TransactionServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(self.expense_repository.rows), 1)
         expense = self.expense_repository.rows[0]
+        self.assertEqual(expense.name, "Product 2")
         self.assertEqual(expense.amount, Decimal("10000.00"))
         self.assertEqual(expense.category, "feed_and_nutrition")
         self.assertEqual(expense.purchase_transaction_id, purchase.id)

@@ -457,7 +457,9 @@ class TransactionService:
                             "total_amount": item_total,
                         }
                     )
-                    item_models.append((item_model, ordered_base_quantity))
+                    item_models.append(
+                        (item_model, ordered_base_quantity, product.product_type)
+                    )
                     if (
                         self.inventory_service is not None
                         and transaction_data.status == TransactionStatus.COMPLETED
@@ -641,6 +643,7 @@ class TransactionService:
                         conversion_factor=item_model.conversion_factor,
                         ordered_base_quantity=ordered_base_quantity,
                         chicken_type=item_model.chicken_type,
+                        product_type=product_type,
                         unit_price=item_model.unit_price,
                         subtotal_amount=item_model.subtotal_amount,
                         discount_amount=item_model.discount_amount,
@@ -649,7 +652,7 @@ class TransactionService:
                         quantity_received=Decimal("0"),
                         quantity_remaining=ordered_base_quantity,
                     )
-                    for item_model, ordered_base_quantity in item_models
+                    for item_model, ordered_base_quantity, product_type in item_models
                 ]
                 response = TransactionResponse(
                     id=transaction.id,
@@ -755,7 +758,7 @@ class TransactionService:
         expense = await self.expense_repository.create(
             farm_id,
             {
-                "name": f"Inventory purchase {transaction.reference_number}",
+                "name": product_names,
                 "category": category_key,
                 "amount": expense_amount,
                 "expense_date": transaction.transaction_date,

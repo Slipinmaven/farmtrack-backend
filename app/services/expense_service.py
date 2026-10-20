@@ -126,8 +126,10 @@ class ExpenseService:
                     ),
                 },
             )
+            await self.unit_of_work.flush()
+            response = self._to_response(expense, category.name)
             await self.unit_of_work.commit()
-            return self._to_response(expense, category.name)
+            return response
 
     async def list_expenses(
         self,
@@ -279,8 +281,10 @@ class ExpenseService:
                     "event_action": "payment_recorded",
                 },
             )
+            await self.unit_of_work.flush()
+            response = self._to_response(expense, category.name)
             await self.unit_of_work.commit()
-            return self._to_response(expense, category.name)
+            return response
 
     async def record_refund(
         self,
@@ -331,8 +335,10 @@ class ExpenseService:
                     "event_action": "refund_recorded",
                 },
             )
+            await self.unit_of_work.flush()
+            response = self._to_response(expense, category.name)
             await self.unit_of_work.commit()
-            return self._to_response(expense, category.name)
+            return response
 
     async def update_expense(
         self,
@@ -400,8 +406,10 @@ class ExpenseService:
                     "event_action": "updated",
                 },
             )
+            await self.unit_of_work.flush()
+            response = self._to_response(expense, category.name)
             await self.unit_of_work.commit()
-            return self._to_response(expense, category.name)
+            return response
 
     async def cancel_expense(
         self,
@@ -438,8 +446,10 @@ class ExpenseService:
                     "cancellation_reason": expense.cancellation_reason,
                 },
             )
+            await self.unit_of_work.flush()
+            response = self._to_response(expense, category.name)
             await self.unit_of_work.commit()
-            return self._to_response(expense, category.name)
+            return response
 
     async def list_categories(
         self,
@@ -628,10 +638,19 @@ class ExpenseService:
     def _to_response(expense, category_name: str) -> ExpenseResponse:
         paid = _net_payments(expense.payments)
         balance = max(Decimal("0.00"), expense.amount - paid)
+        display_name = expense.name
+        if expense.purchase_transaction_id is not None and expense.notes:
+            purchase_match = re.search(
+                r"(?:^|\n)\s*Purchased products:\s*(.+?)(?:\r?\n|$)",
+                expense.notes,
+                re.IGNORECASE,
+            )
+            if purchase_match and purchase_match.group(1).strip():
+                display_name = purchase_match.group(1).strip()
         return ExpenseResponse(
             id=expense.id,
             farm_id=expense.farm_id,
-            name=expense.name,
+            name=display_name,
             category=expense.category,
             category_name=category_name,
             amount=expense.amount,

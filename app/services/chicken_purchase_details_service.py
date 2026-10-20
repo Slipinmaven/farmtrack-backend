@@ -120,6 +120,7 @@ class ChickenPurchaseDetailsService:
                         quantity_received=received_quantity,
                         quantity_remaining=ordered_quantity - received_quantity,
                         product_name=item.product.name,
+                        product_type=item.product.product_type,
                         unit_name=item.unit.name,
                     )
                 )
