@@ -26,6 +26,12 @@ class FakeRepository:
         self.updated = []
 
     async def list_by_farm(self, farm_id, **kwargs):
+        if "is_active" in kwargs:
+            return [
+                item
+                for item in self.items
+                if item.is_active == kwargs["is_active"]
+            ]
         return self.items
 
     async def update(self, item):
@@ -88,7 +94,7 @@ async def test_complete_setup_requires_an_active_block():
         chicken_products=[
             SimpleNamespace(is_active=True, product_type=ProductType.CHICKENS)
         ],
-        blocks=[],
+        blocks=[SimpleNamespace(is_active=False)],
     )
 
     with pytest.raises(ConflictError, match="active housing block"):
