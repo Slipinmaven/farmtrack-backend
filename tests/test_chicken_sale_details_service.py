@@ -90,7 +90,14 @@ class ChickenSaleDetailsServiceTests(unittest.IsolatedAsyncioTestCase):
             status=TransactionStatus.COMPLETED,
             reference_number="SALE-002",
             transaction_date=date(2026, 10, 2),
-            items=[SimpleNamespace(total_amount=Decimal("30.00"))],
+            items=[
+                SimpleNamespace(
+                    id=uuid4(),
+                    quantity=Decimal("1"),
+                    conversion_factor=Decimal("1"),
+                    total_amount=Decimal("30.00"),
+                )
+            ],
             payments=[SimpleNamespace(amount=Decimal("50.00"))],
         )
         allocation = SimpleNamespace(
@@ -127,7 +134,7 @@ class ChickenSaleDetailsServiceTests(unittest.IsolatedAsyncioTestCase):
             get_by_id=AsyncMock(return_value=SimpleNamespace(name="Customer One"))
         )
         sale_return_repository = SimpleNamespace(
-            get_total_credit_by_transaction=AsyncMock(return_value=Decimal("0.00"))
+            get_credited_quantities_by_item=AsyncMock(return_value={})
         )
         transaction_refund_repository = SimpleNamespace(
             get_total_by_transaction=AsyncMock(return_value=Decimal("0.00"))

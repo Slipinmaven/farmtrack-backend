@@ -54,7 +54,10 @@ from app.services.transaction_balance import (
     get_settlement_adjustment,
 )
 from app.services.inventory_service import InventoryService
-from app.services.transaction_pricing import calculate_discount_allocation
+from app.services.transaction_pricing import (
+    calculate_discount_allocation,
+    calculate_sale_return_credit_total,
+)
 from app.services.transaction_reference import (
     farm_local_date,
     format_transaction_reference,
@@ -180,10 +183,14 @@ class TransactionService:
                         transaction.id
                     )
                 )
-                total_credits = (
-                    await self.sale_return_repository.get_total_credit_by_transaction(
+                returned_quantities = (
+                    await self.sale_return_repository.get_credited_quantities_by_item(
                         transaction.id
                     )
+                )
+                total_credits = calculate_sale_return_credit_total(
+                    transaction.items,
+                    returned_quantities,
                 )
             else:
                 amount_refunded = (

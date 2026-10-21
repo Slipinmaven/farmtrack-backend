@@ -23,6 +23,7 @@ from app.services.transaction_balance import (
     calculate_transaction_balance,
     get_settlement_adjustment,
 )
+from app.services.transaction_pricing import calculate_sale_return_credit_total
 
 logger = get_application_logger()
 
@@ -73,14 +74,18 @@ class TransactionRefundService:
                     transaction_id
                 )
             )
-            total_credits = (
-                await self.sale_return_repository.get_total_credit_by_transaction(
+            returned_quantities = (
+                await self.sale_return_repository.get_credited_quantities_by_item(
                     transaction_id
                 )
             )
             transaction_total = sum(
                 (item.total_amount for item in transaction.items),
                 Decimal("0.00"),
+            )
+            total_credits = calculate_sale_return_credit_total(
+                transaction.items,
+                returned_quantities,
             )
             current_balances = calculate_transaction_balance(
                 transaction_total,
@@ -89,10 +94,23 @@ class TransactionRefundService:
                 total_credits,
                 settlement_adjustment=get_settlement_adjustment(transaction),
             )
-            if request.amount > current_balances.credit_balance:
+            return_value_remaining = max(
+                total_credits - amount_refunded,
+                Decimal("0.00"),
+            )
+            if request.amount > return_value_remaining:
                 raise ConflictError(
-                    f"Refund exceeds the available customer credit of "
-                    f"{current_balances.credit_balance}."
+                    f"Refund exceeds the unrefunded sale-return value of "
+                    f"{return_value_remaining}."
+                )
+            cash_received_remaining = max(
+                current_balances.amount_paid,
+                Decimal("0.00"),
+            )
+            if request.amount > cash_received_remaining:
+                raise ConflictError(
+                    f"Refund exceeds the cash received and not yet refunded: "
+                    f"{cash_received_remaining}."
                 )
 
             refund = await self.transaction_refund_repository.create(

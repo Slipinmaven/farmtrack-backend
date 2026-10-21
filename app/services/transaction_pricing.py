@@ -1,4 +1,5 @@
 from decimal import Decimal, ROUND_HALF_UP
+from typing import Iterable, Mapping
 
 CENT = Decimal("0.01")
 
@@ -65,6 +66,42 @@ def calculate_discount_allocation(
         Decimal(amount).scaleb(-2).quantize(CENT) for amount in allocations
     ]
     return discount_amount, line_discounts
+
+
+def calculate_prorated_return_credit(
+    total_amount: Decimal,
+    returned_quantity: Decimal,
+    ordered_quantity: Decimal,
+) -> Decimal:
+    if ordered_quantity <= 0 or returned_quantity <= 0:
+        return Decimal("0.00")
+    return (total_amount * returned_quantity / ordered_quantity).quantize(
+        CENT,
+        rounding=ROUND_HALF_UP,
+    )
+
+
+def calculate_sale_return_credit_total(
+    transaction_items: Iterable[object],
+    returned_quantities: Mapping[object, Decimal],
+) -> Decimal:
+    total = Decimal("0.00")
+    for item in transaction_items:
+        returned_quantity = returned_quantities.get(
+            getattr(item, "id", None),
+            Decimal("0"),
+        )
+        if returned_quantity <= 0:
+            continue
+        ordered_quantity = (
+            Decimal(str(item.quantity)) * Decimal(str(item.conversion_factor))
+        )
+        total += calculate_prorated_return_credit(
+            Decimal(str(item.total_amount)),
+            returned_quantity,
+            ordered_quantity,
+        )
+    return total
 
 
 def validate_payment_confirmation(

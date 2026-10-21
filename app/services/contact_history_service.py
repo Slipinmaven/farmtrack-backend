@@ -25,6 +25,7 @@ from app.services.transaction_balance import (
     calculate_transaction_balance,
     get_settlement_adjustment,
 )
+from app.services.transaction_pricing import calculate_sale_return_credit_total
 
 
 class ContactHistoryService:
@@ -122,10 +123,14 @@ class ContactHistoryService:
                     transaction.id
                 )
             )
-            credits = (
-                await self.sale_return_repository.get_total_credit_by_transaction(
+            returned_quantities = (
+                await self.sale_return_repository.get_credited_quantities_by_item(
                     transaction.id
                 )
+            )
+            credits = calculate_sale_return_credit_total(
+                transaction.items,
+                returned_quantities,
             )
         else:
             refunded = await self.supplier_refund_repository.get_total_by_transaction(

@@ -156,11 +156,15 @@ class FakePaymentRepository:
 
 
 class FakeCreditRepository:
-    def __init__(self, total=Decimal("0.00")):
+    def __init__(self, total=Decimal("0.00"), returned_quantities=None):
         self.total = total
+        self.returned_quantities = returned_quantities or {}
 
     async def get_total_credit_by_transaction(self, transaction_id):
         return self.total
+
+    async def get_credited_quantities_by_item(self, transaction_id):
+        return self.returned_quantities
 
 
 class FakeRefundRepository:
@@ -781,7 +785,14 @@ class TransactionServiceTests(unittest.IsolatedAsyncioTestCase):
             reference_number=None,
             transaction_type=TransactionType.SALE,
             status=TransactionStatus.COMPLETED,
-            items=[SimpleNamespace(total_amount=Decimal("100.00"))],
+            items=[
+                SimpleNamespace(
+                    id=uuid4(),
+                    quantity=Decimal("1"),
+                    conversion_factor=Decimal("1"),
+                    total_amount=Decimal("100.00"),
+                )
+            ],
         )
         transaction_service = TransactionService(
             transaction_repository=FakeTransactionRepository(transaction),
@@ -859,6 +870,7 @@ class TransactionServiceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_payment_summary_uses_existing_credits_and_refunds(self):
         transaction_id = uuid4()
+        item_id = uuid4()
         transaction = SimpleNamespace(
             id=transaction_id,
             farm_id=self.farm_id,
@@ -866,7 +878,14 @@ class TransactionServiceTests(unittest.IsolatedAsyncioTestCase):
             reference_number=None,
             transaction_type=TransactionType.SALE,
             status=TransactionStatus.COMPLETED,
-            items=[SimpleNamespace(total_amount=Decimal("100.00"))],
+            items=[
+                SimpleNamespace(
+                    id=item_id,
+                    quantity=Decimal("1"),
+                    conversion_factor=Decimal("1"),
+                    total_amount=Decimal("100.00"),
+                )
+            ],
         )
         transaction_service = TransactionService(
             transaction_repository=FakeTransactionRepository(transaction),
@@ -885,7 +904,10 @@ class TransactionServiceTests(unittest.IsolatedAsyncioTestCase):
             product_unit_repository=FakeProductUnitRepository(self.product_units),
             unit_of_work=FakeUnitOfWork(),
             activity_service=self.activity_service,
-            sale_return_repository=FakeCreditRepository(Decimal("30.00")),
+            sale_return_repository=FakeCreditRepository(
+                Decimal("30.00"),
+                {item_id: Decimal("0.30")},
+            ),
             transaction_refund_repository=FakeRefundRepository(Decimal("20.00")),
         )
 

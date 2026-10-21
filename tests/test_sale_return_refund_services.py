@@ -499,7 +499,7 @@ class SaleReturnRefundServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.batch_block.quantity, 6)
         self.assertEqual(self.return_repository.returns, [])
 
-    async def test_refund_cannot_exceed_available_credit(self):
+    async def test_refund_cannot_exceed_unrefunded_return_value(self):
         await self.return_service.create_return(
             self.farm_id,
             self.transaction_id,
@@ -512,6 +512,115 @@ class SaleReturnRefundServiceTests(unittest.IsolatedAsyncioTestCase):
                 self._refund_request("60.01"),
             )
         self.assertEqual(self.refund_repository.refunds, [])
+
+    async def test_refund_uses_return_value_even_when_customer_still_owes(self):
+        self.payment_repository.payments = [
+            SimpleNamespace(amount=Decimal("80.00"))
+        ]
+        await self.return_service.create_return(
+            self.farm_id,
+            self.transaction_id,
+            self._return_request(SaleReturnType.UNDELIVERED_CANCELLED, 3),
+        )
+
+        result = await self.refund_service.create_refund(
+            self.farm_id,
+            self.transaction_id,
+            self._refund_request("30.00"),
+        )
+
+        self.assertEqual(result.adjusted_transaction_total, Decimal("70.00"))
+        self.assertEqual(result.amount_paid, Decimal("50.00"))
+        self.assertEqual(result.balance_due, Decimal("20.00"))
+        self.assertEqual(result.credit_balance, Decimal("0.00"))
+
+    async def test_refund_cannot_exceed_cash_received(self):
+        self.payment_repository.payments = [
+            SimpleNamespace(amount=Decimal("20.00"))
+        ]
+        await self.return_service.create_return(
+            self.farm_id,
+            self.transaction_id,
+            self._return_request(SaleReturnType.UNDELIVERED_CANCELLED, 3),
+        )
+
+        with self.assertRaises(ConflictError):
+            await self.refund_service.create_refund(
+                self.farm_id,
+                self.transaction_id,
+                self._refund_request("20.01"),
+            )
+
+        self.assertEqual(self.refund_repository.refunds, [])
+
+    async def test_discounted_return_uses_net_item_value_not_stored_credit(self):
+        self.transaction.items[0].total_amount = Decimal("40.00")
+        self.return_repository.items.append(
+            SimpleNamespace(
+                transaction_item_id=self.transaction_item_id,
+                quantity=Decimal("4"),
+                credit_amount=Decimal("24.00"),
+            )
+        )
+
+        result = await self.refund_service.create_refund(
+            self.farm_id,
+            self.transaction_id,
+            self._refund_request("16.00"),
+        )
+
+        self.assertEqual(result.adjusted_transaction_total, Decimal("24.00"))
+        self.assertEqual(result.credit_balance, Decimal("60.00"))
+
+    async def test_discounted_sale_return_recomputes_previous_return_credit(self):
+        self.transaction.items[0].total_amount = Decimal("40.00")
+        self.return_repository.items.append(
+            SimpleNamespace(
+                transaction_item_id=self.transaction_item_id,
+                quantity=Decimal("4"),
+                credit_amount=Decimal("24.00"),
+            )
+        )
+
+        result = await self.return_service.create_return(
+            self.farm_id,
+            self.transaction_id,
+            self._return_request(SaleReturnType.UNDELIVERED_CANCELLED, 6),
+        )
+
+        self.assertEqual(result.credit_total, Decimal("24.00"))
+        self.assertEqual(result.adjusted_transaction_total, Decimal("0.00"))
+
+    async def test_sale_return_history_recalculates_discounted_return_value(self):
+        self.transaction.items[0].total_amount = Decimal("40.00")
+        returned_item = SimpleNamespace(
+            id=uuid4(),
+            transaction_item_id=self.transaction_item_id,
+            quantity=Decimal("4"),
+            credit_amount=Decimal("24.00"),
+            batch_allocations=[],
+        )
+        self.return_repository.returns.append(
+            SimpleNamespace(
+                id=uuid4(),
+                transaction_id=self.transaction_id,
+                return_type=SaleReturnType.DELIVERED_RETURN.value,
+                return_date=date(2026, 10, 9),
+                return_time=None,
+                reason="Customer return",
+                notes=None,
+                created_at=datetime.now(),
+                items=[returned_item],
+            )
+        )
+
+        history = await self.return_service.list_returns(
+            self.farm_id,
+            self.transaction_id,
+        )
+
+        self.assertEqual(history[0].credit_total, Decimal("16.00"))
+        self.assertEqual(history[0].items[0].credit_amount, Decimal("16.00"))
 
     async def test_refund_reduces_net_paid_and_customer_credit(self):
         await self.return_service.create_return(

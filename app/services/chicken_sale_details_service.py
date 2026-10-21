@@ -26,6 +26,7 @@ from app.services.transaction_balance import (
     calculate_transaction_balance,
     get_settlement_adjustment,
 )
+from app.services.transaction_pricing import calculate_sale_return_credit_total
 
 
 def _to_discount_type(
@@ -237,10 +238,14 @@ class ChickenSaleDetailsService:
                 transaction.id
             )
         )
-        sale_credits = (
-            await self.sale_return_repository.get_total_credit_by_transaction(
+        returned_quantities = (
+            await self.sale_return_repository.get_credited_quantities_by_item(
                 transaction.id
             )
+        )
+        sale_credits = calculate_sale_return_credit_total(
+            transaction.items,
+            returned_quantities,
         )
         return calculate_transaction_balance(
             transaction_total,

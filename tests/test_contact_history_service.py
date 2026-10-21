@@ -9,14 +9,18 @@ from app.services.contact_history_service import ContactHistoryService
 
 
 class FakeTotalRepository:
-    def __init__(self, total: str):
+    def __init__(self, total: str, returned_quantities=None):
         self.total = Decimal(total)
+        self.returned_quantities = returned_quantities or {}
 
     async def get_total_by_transaction(self, _transaction_id):
         return self.total
 
     async def get_total_credit_by_transaction(self, _transaction_id):
         return self.total
+
+    async def get_credited_quantities_by_item(self, _transaction_id):
+        return self.returned_quantities
 
 
 class FakePurchaseReplacementRepository:
@@ -42,7 +46,14 @@ def create_transaction(transaction_type: TransactionType, paid: str):
         id=uuid4(),
         transaction_type=transaction_type,
         status=TransactionStatus.COMPLETED,
-        items=[SimpleNamespace(total_amount=Decimal("100.00"))],
+        items=[
+            SimpleNamespace(
+                id=uuid4(),
+                quantity=Decimal("1"),
+                conversion_factor=Decimal("1"),
+                total_amount=Decimal("100.00"),
+            )
+        ],
         payments=[SimpleNamespace(amount=Decimal(paid))],
     )
 
@@ -51,6 +62,9 @@ def create_transaction(transaction_type: TransactionType, paid: str):
 async def test_sale_history_balance_includes_refunds_and_sale_credits():
     service = create_service()
     transaction = create_transaction(TransactionType.SALE, "40.00")
+    service.sale_return_repository.returned_quantities = {
+        transaction.items[0].id: Decimal("0.10")
+    }
 
     balance = await service._calculate_balance(transaction)
 

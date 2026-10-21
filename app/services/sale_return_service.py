@@ -1,5 +1,5 @@
 from collections import defaultdict
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal
 from uuid import UUID
 
 from app.core.exceptions import ConflictError, ResourceNotFoundError
@@ -38,6 +38,10 @@ from app.services.inventory_service import InventoryService
 from app.services.transaction_balance import (
     calculate_transaction_balance,
     get_settlement_adjustment,
+)
+from app.services.transaction_pricing import (
+    calculate_prorated_return_credit,
+    calculate_sale_return_credit_total,
 )
 
 logger = get_application_logger()
@@ -122,9 +126,15 @@ class SaleReturnService:
                     transaction_id
                 )
             )
-            credited_amounts = await self.sale_return_repository.get_credit_amounts_by_item(
-                transaction_id
-            )
+            credited_amounts = {
+                item_id: calculate_prorated_return_credit(
+                    Decimal(str(transaction_items[item_id].total_amount)),
+                    quantity,
+                    self._ordered_quantity(transaction_items[item_id]),
+                )
+                for item_id, quantity in credited_quantities.items()
+                if item_id in transaction_items
+            }
 
             block_ids = {
                 allocation.block_id
@@ -262,11 +272,11 @@ class SaleReturnService:
                     credited_quantities.get(transaction_item.id, Decimal("0"))
                     + quantity
                 )
-                cumulative_credit = (
-                    transaction_item.total_amount
-                    * cumulative_credited_quantity
-                    / ordered_quantity
-                ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                cumulative_credit = calculate_prorated_return_credit(
+                    transaction_item.total_amount,
+                    cumulative_credited_quantity,
+                    ordered_quantity,
+                )
                 credit_amount = cumulative_credit - credited_amounts.get(
                     transaction_item.id,
                     Decimal("0.00"),
@@ -465,8 +475,14 @@ class SaleReturnService:
                     transaction_id
                 )
             )
-            total_credits = await self.sale_return_repository.get_total_credit_by_transaction(
-                transaction_id
+            credited_quantities = (
+                await self.sale_return_repository.get_credited_quantities_by_item(
+                    transaction_id
+                )
+            )
+            total_credits = calculate_sale_return_credit_total(
+                transaction.items,
+                credited_quantities,
             )
             transaction_total = sum(
                 (item.total_amount for item in transaction.items),
@@ -531,8 +547,15 @@ class SaleReturnService:
             )
             transaction_items = {item.id: item for item in transaction.items}
             responses = []
+            credited_quantities: defaultdict[UUID, Decimal] = defaultdict(
+                lambda: Decimal("0")
+            )
+            credited_amounts: defaultdict[UUID, Decimal] = defaultdict(
+                lambda: Decimal("0.00")
+            )
             for sale_return in returns:
                 response_items = []
+                return_credit_total = Decimal("0.00")
                 for item in sale_return.items:
                     transaction_item = transaction_items[item.transaction_item_id]
                     product = await self.product_repository.get_by_id(
@@ -541,6 +564,17 @@ class SaleReturnService:
                     )
                     if product is None:
                         raise ResourceNotFoundError("Sale product not found.")
+                    credited_quantities[item.transaction_item_id] += item.quantity
+                    cumulative_credit = calculate_prorated_return_credit(
+                        transaction_item.total_amount,
+                        credited_quantities[item.transaction_item_id],
+                        self._ordered_quantity(transaction_item),
+                    )
+                    credit_amount = (
+                        cumulative_credit - credited_amounts[item.transaction_item_id]
+                    )
+                    credited_amounts[item.transaction_item_id] = cumulative_credit
+                    return_credit_total += credit_amount
                     response_items.append(
                         SaleReturnItemResponse(
                             id=item.id,
@@ -548,7 +582,7 @@ class SaleReturnService:
                             product_id=product.id,
                             product_name=getattr(product, "name", None),
                             quantity=item.quantity,
-                            credit_amount=item.credit_amount,
+                            credit_amount=credit_amount,
                             batch_allocations=[
                                 SaleDeliveryAllocationResponse(
                                     batch_id=allocation.batch_id,
@@ -569,10 +603,7 @@ class SaleReturnService:
                         reason=sale_return.reason,
                         notes=sale_return.notes,
                         created_at=sale_return.created_at,
-                        credit_total=sum(
-                            (item.credit_amount for item in sale_return.items),
-                            Decimal("0.00"),
-                        ),
+                        credit_total=return_credit_total,
                         items=response_items,
                     )
                 )

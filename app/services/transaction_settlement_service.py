@@ -48,6 +48,7 @@ from app.services.activity_service import ActivityService
 from app.services.chicken_age import calculate_hatch_date
 from app.services.inventory_service import InventoryService
 from app.services.transaction_balance import calculate_transaction_balance
+from app.services.transaction_pricing import calculate_sale_return_credit_total
 
 CENT = Decimal("0.01")
 THOUSANDTH = Decimal("0.001")
@@ -673,10 +674,14 @@ class TransactionSettlementService:
             amount_refunded = await self.refund_repository.get_total_by_transaction(
                 transaction.id
             )
-            credit_notes = (
-                await self.sale_return_repository.get_total_credit_by_transaction(
+            returned_quantities = (
+                await self.sale_return_repository.get_credited_quantities_by_item(
                     transaction.id
                 )
+            )
+            credit_notes = calculate_sale_return_credit_total(
+                transaction.items,
+                returned_quantities,
             )
         else:
             amount_refunded = (

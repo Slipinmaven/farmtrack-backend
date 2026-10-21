@@ -154,6 +154,7 @@ class TransactionSettlementServiceTests(unittest.IsolatedAsyncioTestCase):
             ),
             sale_return_repository=SimpleNamespace(
                 get_total_credit_by_transaction=self.zero,
+                get_credited_quantities_by_item=self.empty_return_quantities,
             ),
             purchase_return_repository=SimpleNamespace(
                 get_total_credit_by_transaction=self.zero,
@@ -190,6 +191,9 @@ class TransactionSettlementServiceTests(unittest.IsolatedAsyncioTestCase):
 
     async def zero(self, transaction_id):
         return Decimal("0.00")
+
+    async def empty_return_quantities(self, transaction_id):
+        return {}
 
     async def get_product(self, farm_id, product_id):
         return self.product if product_id == self.product.id else None
