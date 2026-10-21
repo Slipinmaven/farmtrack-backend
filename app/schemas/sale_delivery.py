@@ -10,6 +10,10 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.schemas.enums import ChickenType
 
 PositiveQuantity = Annotated[int, Field(gt=0)]
+PositiveDeliveryQuantity = Annotated[
+    Decimal,
+    Field(gt=0, max_digits=12, decimal_places=3),
+]
 
 
 class SaleDeliveryBatchAllocation(BaseModel):
@@ -24,13 +28,14 @@ class SaleDeliveryItemRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     transaction_item_id: UUID
-    quantity_delivered: PositiveQuantity
+    quantity_delivered: PositiveDeliveryQuantity
     batch_allocations: list[SaleDeliveryBatchAllocation] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_allocations(self) -> "SaleDeliveryItemRequest":
         if self.batch_allocations and sum(
-            allocation.quantity for allocation in self.batch_allocations
+            (Decimal(allocation.quantity) for allocation in self.batch_allocations),
+            Decimal("0"),
         ) != self.quantity_delivered:
             raise ValueError("Batch allocations must equal quantity_delivered.")
 
@@ -88,6 +93,8 @@ class SaleDeliveryResponse(BaseModel):
 class SaleFulfillmentItemResponse(BaseModel):
     transaction_item_id: UUID
     chicken_type: ChickenType | None
+    unit_name: str | None = None
+    unit_abbreviation: str | None = None
     ordered_quantity: Decimal
     delivered_quantity: Decimal
     returned_quantity: Decimal

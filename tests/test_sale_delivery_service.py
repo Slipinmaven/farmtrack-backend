@@ -192,6 +192,7 @@ class SaleDeliveryServiceTests(unittest.IsolatedAsyncioTestCase):
             name="Layer chickens",
             product_type=ProductType.CHICKENS,
             is_active=True,
+            product_units=[],
         )
         transaction = SimpleNamespace(
             id=self.transaction_id,
@@ -312,6 +313,7 @@ class SaleDeliveryServiceTests(unittest.IsolatedAsyncioTestCase):
             name="Large eggs",
             product_type=ProductType.EGGS,
             is_active=True,
+            product_units=[],
         )
         item = SimpleNamespace(
             id=self.transaction_item_id,
@@ -341,7 +343,7 @@ class SaleDeliveryServiceTests(unittest.IsolatedAsyncioTestCase):
                 "items": [
                     {
                         "transaction_item_id": str(self.transaction_item_id),
-                        "quantity_delivered": 4,
+                        "quantity_delivered": "4.5",
                     }
                 ],
             }
@@ -352,17 +354,45 @@ class SaleDeliveryServiceTests(unittest.IsolatedAsyncioTestCase):
             first_request,
         )
 
-        self.assertEqual(first_delivery.items[0].quantity_delivered, Decimal("4"))
-        self.assertEqual(first_delivery.items[0].remaining_quantity, Decimal("6"))
+        self.assertEqual(first_delivery.items[0].quantity_delivered, Decimal("4.500"))
+        self.assertEqual(first_delivery.items[0].remaining_quantity, Decimal("5.500"))
         self.assertEqual(first_delivery.items[0].batch_allocations, [])
-        self.assertEqual(inventory_service.movements[0]["quantity_delta"], Decimal("-4"))
+        self.assertEqual(
+            inventory_service.movements[0]["quantity_delta"],
+            Decimal("-4.500"),
+        )
 
         fulfillment = await self.service.get_fulfillment(
             self.farm_id,
             self.transaction_id,
         )
         self.assertFalse(fulfillment.fully_delivered)
-        self.assertEqual(fulfillment.items[0].outstanding_quantity, Decimal("6"))
+        self.assertEqual(
+            fulfillment.items[0].outstanding_quantity,
+            Decimal("5.500"),
+        )
+
+    async def test_chicken_delivery_must_remain_a_whole_number(self):
+        request = SaleDeliveryCreateRequest.model_validate(
+            {
+                "delivered_date": date(2026, 10, 9),
+                "items": [
+                    {
+                        "transaction_item_id": str(self.transaction_item_id),
+                        "quantity_delivered": "1.5",
+                        "batch_allocations": [],
+                    }
+                ],
+            }
+        )
+
+        with self.assertRaisesRegex(ConflictError, "whole chickens"):
+            await self.service.create_delivery(
+                self.farm_id,
+                self.transaction_id,
+                request,
+            )
+        self.assertEqual(self.delivery_repository.deliveries, [])
 
     async def test_legacy_egg_sale_cannot_be_delivered_again(self):
         product = SimpleNamespace(
@@ -371,6 +401,7 @@ class SaleDeliveryServiceTests(unittest.IsolatedAsyncioTestCase):
             name="Large eggs",
             product_type=ProductType.EGGS,
             is_active=True,
+            product_units=[],
         )
         transaction = SimpleNamespace(
             id=self.transaction_id,

@@ -131,6 +131,11 @@ class SaleDeliveryService:
                     - cancelled_quantities.get(transaction_item.id, Decimal("0"))
                 )
                 requested_quantity = Decimal(delivery_item.quantity_delivered)
+                if (
+                    product.product_type == ProductType.CHICKENS
+                    and requested_quantity != requested_quantity.to_integral_value()
+                ):
+                    raise ConflictError("Chicken deliveries must be whole chickens.")
                 if requested_quantity > remaining_quantity:
                     item_name = (
                         "chickens"
@@ -451,6 +456,22 @@ class SaleDeliveryService:
                     SaleFulfillmentItemResponse(
                         transaction_item_id=transaction_item.id,
                         chicken_type=transaction_item.chicken_type,
+                        unit_name=next(
+                            (
+                                product_unit.unit.name
+                                for product_unit in product.product_units
+                                if product_unit.is_base_unit
+                            ),
+                            None,
+                        ),
+                        unit_abbreviation=next(
+                            (
+                                product_unit.unit.abbreviation
+                                for product_unit in product.product_units
+                                if product_unit.is_base_unit
+                            ),
+                            None,
+                        ),
                         ordered_quantity=ordered_quantity,
                         delivered_quantity=delivered_quantity,
                         returned_quantity=returned_quantity,

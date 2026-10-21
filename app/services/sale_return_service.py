@@ -198,12 +198,16 @@ class SaleReturnService:
                             f"{outstanding_quantity} remain undelivered."
                         )
                 else:
+                    tracks_delivery = is_chicken or (
+                        product.product_type == ProductType.EGGS
+                        and getattr(transaction, "fulfillment_required", False)
+                    )
                     delivered_quantity = (
                         delivered_by_item.get(
                             transaction_item.id,
                             Decimal("0"),
                         )
-                        if is_chicken
+                        if tracks_delivery
                         else ordered_quantity
                     )
                     returnable_quantity = (
@@ -212,7 +216,7 @@ class SaleReturnService:
                     )
                     if quantity > returnable_quantity:
                         raise ConflictError(
-                            f"Cannot return {quantity} chickens; only "
+                            f"Cannot return {quantity} units; only "
                             f"{returnable_quantity} were delivered and not previously returned."
                         )
 

@@ -399,6 +399,21 @@ class SaleReturnRefundServiceTests(unittest.IsolatedAsyncioTestCase):
                 self.transaction_id,
                 self._return_request(SaleReturnType.UNDELIVERED_CANCELLED, 7),
             )
+
+    async def test_tracked_egg_return_cannot_exceed_delivered_quantity(self):
+        self.transaction.fulfillment_required = True
+        self.transaction.items[0].chicken_type = None
+        self.return_service.product_repository.product.product_type = ProductType.EGGS
+
+        with self.assertRaisesRegex(ConflictError, "only 4 were delivered"):
+            await self.return_service.create_return(
+                self.farm_id,
+                self.transaction_id,
+                self._return_request(SaleReturnType.DELIVERED_RETURN, 5),
+            )
+
+        self.assertEqual(self.return_repository.returns, [])
+        self.assertEqual(self.inventory_service.movements, [])
         self.assertEqual(self.return_repository.returns, [])
 
     async def test_delivered_return_restocks_and_issues_proportional_credit(self):
