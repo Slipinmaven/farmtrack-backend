@@ -149,6 +149,21 @@ async def test_chicken_sale_records_transaction_and_deducts_allocated_stock_atom
 
 
 @pytest.mark.asyncio
+async def test_chicken_sale_can_be_recorded_as_an_order_without_delivering_stock():
+    service, product, unit_of_work, transactions, deliveries = make_service()
+    payload = make_request(product.id).model_dump()
+    payload["items"][0].pop("batch_allocations")
+    request = ChickenSaleRequest.model_validate(payload)
+
+    await service.create_chicken_sale(uuid4(), request)
+
+    assert transactions.transaction_data.items[0].quantity == Decimal("3")
+    assert transactions.transaction_data.items[0].batch_allocations == []
+    assert deliveries.request is None
+    assert unit_of_work.commits == 1
+
+
+@pytest.mark.asyncio
 async def test_chicken_sale_can_be_recorded_without_a_customer():
     service, product, _, transactions, _ = make_service()
     request = make_request(product.id).model_copy(update={"customer_id": None})

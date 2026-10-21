@@ -375,6 +375,13 @@ class TransactionServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(expense.purchase_transaction_id, purchase.id)
         self.assertEqual(len(expense.payments), 1)
         self.assertEqual(expense.payments[0].amount, Decimal("10000.00"))
+        purchase_activity = next(
+            event["details"]
+            for event in self.activity_service.events
+            if event["activity_type"] == ActivityType.EXPENSE_RECORDED
+        )
+        self.assertEqual(purchase_activity["product_names"], "Product 2")
+        self.assertEqual(purchase_activity["expense_name"], "Product 2")
         self.assertEqual(
             expense.payments[0].purchase_payment_id,
             purchase.payments[0].id,

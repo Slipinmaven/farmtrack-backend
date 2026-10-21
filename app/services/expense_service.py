@@ -113,17 +113,30 @@ class ExpenseService:
                 "expense_recorded",
                 {
                     "name": expense.name,
+                    "expense_name": expense.name,
                     "category": category.name,
                     "amount": str(expense.amount),
-                    "expense_date": expense.expense_date.isoformat(),
-                    "contact_name": contact.name if contact else None,
-                    "block_name": block.name if block else None,
-                    "notes": expense.notes,
+                    "amount_paid": str(_net_payments(expense.payments)),
+                    "balance_due": str(
+                        max(
+                            Decimal("0.00"),
+                            expense.amount - _net_payments(expense.payments),
+                        )
+                    ),
                     "payment_status": _payment_status(
                         expense.amount,
                         _net_payments(expense.payments),
                         expense.canceled_at,
                     ),
+                    "expense_date": expense.expense_date.isoformat(),
+                    "payment_method": (
+                        initial_payment.payment_method.value
+                        if initial_payment
+                        else None
+                    ),
+                    "contact_name": contact.name if contact else None,
+                    "block_name": block.name if block else None,
+                    "notes": expense.notes,
                 },
             )
             await self.unit_of_work.flush()
@@ -274,10 +287,26 @@ class ExpenseService:
                 "expense_payment_recorded",
                 {
                     "name": expense.name,
+                    "expense_name": expense.name,
+                    "category": category.name,
                     "amount": str(request.amount),
+                    "payment_amount": str(request.amount),
+                    "amount_paid": str(_net_payments(expense.payments)),
+                    "balance_due": str(
+                        max(
+                            Decimal("0.00"),
+                            expense.amount - _net_payments(expense.payments),
+                        )
+                    ),
+                    "payment_status": _payment_status(
+                        expense.amount,
+                        _net_payments(expense.payments),
+                        expense.canceled_at,
+                    ),
                     "payment_date": request.payment_date.isoformat(),
                     "payment_method": request.payment_method.value,
                     "reference_number": request.reference_number,
+                    "contact_name": expense.contact.name if expense.contact else None,
                     "event_action": "payment_recorded",
                 },
             )
@@ -327,11 +356,27 @@ class ExpenseService:
                 "expense_payment_recorded",
                 {
                     "name": expense.name,
+                    "expense_name": expense.name,
+                    "category": category.name,
                     "amount": str(request.amount),
+                    "payment_amount": str(request.amount),
+                    "amount_paid": str(_net_payments(expense.payments)),
+                    "balance_due": str(
+                        max(
+                            Decimal("0.00"),
+                            expense.amount - _net_payments(expense.payments),
+                        )
+                    ),
+                    "payment_status": _payment_status(
+                        expense.amount,
+                        _net_payments(expense.payments),
+                        expense.canceled_at,
+                    ),
                     "payment_date": request.payment_date.isoformat(),
                     "payment_method": request.payment_method.value,
                     "reason": request.reason.strip(),
                     "kind": "refund",
+                    "contact_name": expense.contact.name if expense.contact else None,
                     "event_action": "refund_recorded",
                 },
             )
@@ -400,9 +445,25 @@ class ExpenseService:
                 "expense_recorded",
                 {
                     "name": expense.name,
+                    "expense_name": expense.name,
                     "category": category.name,
                     "amount": str(expense.amount),
+                    "amount_paid": str(_net_payments(expense.payments)),
+                    "balance_due": str(
+                        max(
+                            Decimal("0.00"),
+                            expense.amount - _net_payments(expense.payments),
+                        )
+                    ),
+                    "payment_status": _payment_status(
+                        expense.amount,
+                        _net_payments(expense.payments),
+                        expense.canceled_at,
+                    ),
                     "expense_date": expense.expense_date.isoformat(),
+                    "contact_name": expense.contact.name if expense.contact else None,
+                    "block_name": expense.block.name if expense.block else None,
+                    "notes": expense.notes,
                     "event_action": "updated",
                 },
             )
@@ -440,8 +501,11 @@ class ExpenseService:
                 "expense_recorded",
                 {
                     "name": expense.name,
+                    "expense_name": expense.name,
                     "amount": str(expense.amount),
                     "category": category.name,
+                    "expense_date": expense.expense_date.isoformat(),
+                    "contact_name": expense.contact.name if expense.contact else None,
                     "event_action": "cancelled",
                     "cancellation_reason": expense.cancellation_reason,
                 },

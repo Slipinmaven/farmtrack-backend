@@ -58,7 +58,7 @@ class ChickenSaleItemCreate(BaseModel):
     unit_id: UUID
     unit_price: Decimal = Field(ge=0, max_digits=12, decimal_places=2)
     notes: str | None = None
-    batch_allocations: list[ChickenSaleBatchAllocation] = Field(min_length=1)
+    batch_allocations: list[ChickenSaleBatchAllocation] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_batch_allocations(self) -> "ChickenSaleItemCreate":

@@ -95,6 +95,8 @@ class ChickenSaleService:
                 transaction.items,
                 strict=True,
             ):
+                if not sale_item.batch_allocations:
+                    continue
                 allocated_quantity = sum(
                     allocation.quantity
                     for allocation in sale_item.batch_allocations
@@ -119,16 +121,17 @@ class ChickenSaleService:
                     )
                 )
 
-            await self.sale_delivery_service.create_delivery(
-                farm_id,
-                transaction.id,
-                SaleDeliveryCreateRequest(
-                    delivered_date=transaction.transaction_date,
-                    delivered_time=sale_request.transaction_time,
-                    items=delivery_items,
-                ),
-                user_id=user_id,
-                commit=False,
-            )
+            if delivery_items:
+                await self.sale_delivery_service.create_delivery(
+                    farm_id,
+                    transaction.id,
+                    SaleDeliveryCreateRequest(
+                        delivered_date=transaction.transaction_date,
+                        delivered_time=sale_request.transaction_time,
+                        items=delivery_items,
+                    ),
+                    user_id=user_id,
+                    commit=False,
+                )
             await self.unit_of_work.commit()
             return transaction

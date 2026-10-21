@@ -597,6 +597,10 @@ class ProductConsumptionExpenseServiceTests(unittest.IsolatedAsyncioTestCase):
             self.activity_service.events[-1]["entity_type"],
             ActivityEntityType.EXPENSE,
         )
+        activity_details = self.activity_service.events[-1]["details"]
+        self.assertEqual(activity_details["expense_name"], "Layer feed")
+        self.assertEqual(activity_details["category"], "Feed and nutrition")
+        self.assertEqual(activity_details["payment_status"], "paid")
 
     async def test_purchase_linked_expense_cannot_be_edited_from_expenses(self):
         response = await self.expense_service.create_expense(
@@ -698,6 +702,10 @@ class ProductConsumptionExpenseServiceTests(unittest.IsolatedAsyncioTestCase):
             self.activity_service.events[-1]["details"]["event_action"],
             "payment_recorded",
         )
+        payment_activity = self.activity_service.events[-1]["details"]
+        self.assertEqual(payment_activity["expense_name"], "Layer feed")
+        self.assertEqual(payment_activity["category"], "Feed and nutrition")
+        self.assertEqual(payment_activity["payment_amount"], "850.50")
 
         with self.assertRaises(ConflictError):
             await self.expense_service.record_payment(
