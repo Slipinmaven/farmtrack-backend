@@ -103,14 +103,10 @@ class TransactionRefundService:
                     f"Refund exceeds the unrefunded sale-return value of "
                     f"{return_value_remaining}."
                 )
-            cash_received_remaining = max(
-                current_balances.amount_paid,
-                Decimal("0.00"),
-            )
-            if request.amount > cash_received_remaining:
+            if request.amount > current_balances.credit_balance:
                 raise ConflictError(
-                    f"Refund exceeds the cash received and not yet refunded: "
-                    f"{cash_received_remaining}."
+                    f"Refund exceeds the amount currently refundable after applying "
+                    f"sale returns: {current_balances.credit_balance}."
                 )
 
             refund = await self.transaction_refund_repository.create(

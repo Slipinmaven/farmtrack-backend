@@ -513,7 +513,7 @@ class SaleReturnRefundServiceTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(self.refund_repository.refunds, [])
 
-    async def test_refund_uses_return_value_even_when_customer_still_owes(self):
+    async def test_refund_uses_only_balance_owed_to_customer_after_return(self):
         self.payment_repository.payments = [
             SimpleNamespace(amount=Decimal("80.00"))
         ]
@@ -526,15 +526,15 @@ class SaleReturnRefundServiceTests(unittest.IsolatedAsyncioTestCase):
         result = await self.refund_service.create_refund(
             self.farm_id,
             self.transaction_id,
-            self._refund_request("30.00"),
+            self._refund_request("10.00"),
         )
 
         self.assertEqual(result.adjusted_transaction_total, Decimal("70.00"))
-        self.assertEqual(result.amount_paid, Decimal("50.00"))
-        self.assertEqual(result.balance_due, Decimal("20.00"))
+        self.assertEqual(result.amount_paid, Decimal("70.00"))
+        self.assertEqual(result.balance_due, Decimal("0.00"))
         self.assertEqual(result.credit_balance, Decimal("0.00"))
 
-    async def test_refund_cannot_exceed_cash_received(self):
+    async def test_refund_is_not_allowed_when_sale_still_has_a_balance_due(self):
         self.payment_repository.payments = [
             SimpleNamespace(amount=Decimal("20.00"))
         ]
@@ -548,7 +548,7 @@ class SaleReturnRefundServiceTests(unittest.IsolatedAsyncioTestCase):
             await self.refund_service.create_refund(
                 self.farm_id,
                 self.transaction_id,
-                self._refund_request("20.01"),
+                self._refund_request("0.01"),
             )
 
         self.assertEqual(self.refund_repository.refunds, [])
