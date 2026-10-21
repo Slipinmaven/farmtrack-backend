@@ -86,6 +86,9 @@ class Transaction(Base):
     status: Mapped[TransactionStatus] = mapped_column(
         SQLEnum(TransactionStatus, name="transactionstatus"), nullable=False
     )
+    fulfillment_required: Mapped[bool] = mapped_column(
+        nullable=False, default=False, server_default="false"
+    )
     transaction_date: Mapped[date] = mapped_column(Date, nullable=False)
     transaction_time: Mapped[time | None] = mapped_column(Time, nullable=True)
     reference_number: Mapped[str | None] = mapped_column(String(100), nullable=True)

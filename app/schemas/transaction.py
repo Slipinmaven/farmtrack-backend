@@ -33,6 +33,7 @@ class TransactionCreate(BaseModel):
     transaction_date: date | None = None
     transaction_time: time | None = None
     status: TransactionStatus = TransactionStatus.COMPLETED
+    fulfillment_required: bool = False
     contact_id: UUID | None = None
     notes: str | None = None
     items: list[TransactionItemCreate] = Field(min_length=1)

@@ -98,9 +98,17 @@ class ChickenSaleDetailsService:
                     discount_amount=item.discount_amount,
                     total_amount=item.total_amount,
                     notes=item.notes,
-                    quantity_received=delivered.get(item.id, Decimal("0")),
-                    quantity_remaining=(
+                    quantity_received=(
                         item.quantity * item.conversion_factor
+                        if item.product.product_type.value == "eggs"
+                        and not transaction.fulfillment_required
+                        else delivered.get(item.id, Decimal("0"))
+                    ),
+                    quantity_remaining=(
+                        Decimal("0")
+                        if item.product.product_type.value == "eggs"
+                        and not transaction.fulfillment_required
+                        else item.quantity * item.conversion_factor
                         - delivered.get(item.id, Decimal("0"))
                     ),
                     product_name=item.product.name,

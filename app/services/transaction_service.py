@@ -471,6 +471,12 @@ class TransactionService:
                         self.inventory_service is not None
                         and transaction_data.status == TransactionStatus.COMPLETED
                         and product.product_type != ProductType.CHICKENS
+                        and not (
+                            transaction_data.transaction_type
+                            == TransactionType.SALE
+                            and transaction_data.fulfillment_required
+                            and product.product_type == ProductType.EGGS
+                        )
                     ):
                         is_purchase = (
                             transaction_data.transaction_type

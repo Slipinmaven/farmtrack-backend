@@ -123,6 +123,7 @@ class EggSaleService:
                 transaction_type=TransactionType.SALE,
                 transaction_date=request.transaction_date,
                 transaction_time=request.transaction_time,
+                fulfillment_required=True,
                 contact_id=request.contact_id,
                 notes=request.notes,
                 items=transaction_items,

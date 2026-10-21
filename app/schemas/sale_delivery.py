@@ -25,11 +25,13 @@ class SaleDeliveryItemRequest(BaseModel):
 
     transaction_item_id: UUID
     quantity_delivered: PositiveQuantity
-    batch_allocations: list[SaleDeliveryBatchAllocation] = Field(min_length=1)
+    batch_allocations: list[SaleDeliveryBatchAllocation] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_allocations(self) -> "SaleDeliveryItemRequest":
-        if sum(allocation.quantity for allocation in self.batch_allocations) != self.quantity_delivered:
+        if self.batch_allocations and sum(
+            allocation.quantity for allocation in self.batch_allocations
+        ) != self.quantity_delivered:
             raise ValueError("Batch allocations must equal quantity_delivered.")
 
         allocation_pairs = [

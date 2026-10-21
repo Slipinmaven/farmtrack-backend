@@ -7,6 +7,8 @@ from sqlalchemy.orm import selectinload
 
 from app.models.transaction_items import TransactionItem
 from app.models.transactions import Transaction
+from app.models.sale_return_items import SaleReturnItem
+from app.models.sale_returns import SaleReturn
 from app.schemas.enums import TransactionStatus, TransactionType
 
 
@@ -58,14 +60,28 @@ class TransactionItemRepository:
         self,
         farm_id: UUID,
     ) -> dict[UUID, Decimal]:
+        returned_quantities = (
+            select(
+                SaleReturnItem.transaction_item_id,
+                func.sum(SaleReturnItem.quantity).label("quantity"),
+            )
+            .join(SaleReturn, SaleReturn.id == SaleReturnItem.sale_return_id)
+            .group_by(SaleReturnItem.transaction_item_id)
+            .subquery()
+        )
         result = await self.session.execute(
             select(
                 TransactionItem.product_id,
                 func.sum(
                     TransactionItem.quantity * TransactionItem.conversion_factor
+                    - func.coalesce(returned_quantities.c.quantity, 0)
                 ),
             )
             .join(Transaction, Transaction.id == TransactionItem.transaction_id)
+            .outerjoin(
+                returned_quantities,
+                returned_quantities.c.transaction_item_id == TransactionItem.id,
+            )
             .where(
                 Transaction.farm_id == farm_id,
                 Transaction.transaction_type == TransactionType.SALE,
@@ -83,16 +99,30 @@ class TransactionItemRepository:
         farm_id: UUID,
         product_id: UUID,
     ) -> Decimal:
+        returned_quantities = (
+            select(
+                SaleReturnItem.transaction_item_id,
+                func.sum(SaleReturnItem.quantity).label("quantity"),
+            )
+            .join(SaleReturn, SaleReturn.id == SaleReturnItem.sale_return_id)
+            .group_by(SaleReturnItem.transaction_item_id)
+            .subquery()
+        )
         result = await self.session.execute(
             select(
                 func.coalesce(
                     func.sum(
                         TransactionItem.quantity * TransactionItem.conversion_factor
+                        - func.coalesce(returned_quantities.c.quantity, 0)
                     ),
                     0,
                 )
             )
             .join(Transaction, Transaction.id == TransactionItem.transaction_id)
+            .outerjoin(
+                returned_quantities,
+                returned_quantities.c.transaction_item_id == TransactionItem.id,
+            )
             .where(
                 Transaction.farm_id == farm_id,
                 Transaction.transaction_type == TransactionType.SALE,

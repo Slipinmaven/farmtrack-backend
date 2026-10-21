@@ -156,6 +156,14 @@ class FakeActivityService:
         self.events.append(kwargs)
 
 
+class FakeInventoryService:
+    def __init__(self):
+        self.movements = []
+
+    async def append_movement(self, **kwargs):
+        self.movements.append(kwargs)
+
+
 class SaleDeliveryServiceTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.farm_id = uuid4()
@@ -191,6 +199,7 @@ class SaleDeliveryServiceTests(unittest.IsolatedAsyncioTestCase):
             contact_id=None,
             transaction_type=TransactionType.SALE,
             status=TransactionStatus.COMPLETED,
+            fulfillment_required=False,
             reference_number="SAL-TEST-0001",
             items=[
                 SimpleNamespace(
@@ -295,6 +304,122 @@ class SaleDeliveryServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(fulfillment.fully_delivered)
         self.assertEqual(fulfillment.items[0].delivered_quantity, Decimal("10"))
         self.assertEqual(fulfillment.items[0].outstanding_quantity, Decimal("0"))
+
+    async def test_egg_sale_supports_partial_delivery_and_updates_inventory(self):
+        product = SimpleNamespace(
+            id=self.product_id,
+            farm_id=self.farm_id,
+            name="Large eggs",
+            product_type=ProductType.EGGS,
+            is_active=True,
+        )
+        item = SimpleNamespace(
+            id=self.transaction_item_id,
+            product_id=self.product_id,
+            quantity=Decimal("10"),
+            conversion_factor=Decimal("1"),
+            chicken_type=None,
+        )
+        transaction = SimpleNamespace(
+            id=self.transaction_id,
+            farm_id=self.farm_id,
+            contact_id=None,
+            transaction_type=TransactionType.SALE,
+            status=TransactionStatus.COMPLETED,
+            fulfillment_required=True,
+            reference_number="SAL-EGGS-0001",
+            items=[item],
+        )
+        self.service.transaction_repository.transaction = transaction
+        self.service.product_repository.products[self.product_id] = product
+        inventory_service = FakeInventoryService()
+        self.service.inventory_service = cast(Any, inventory_service)
+
+        first_request = SaleDeliveryCreateRequest.model_validate(
+            {
+                "delivered_date": date(2026, 10, 9),
+                "items": [
+                    {
+                        "transaction_item_id": str(self.transaction_item_id),
+                        "quantity_delivered": 4,
+                    }
+                ],
+            }
+        )
+        first_delivery = await self.service.create_delivery(
+            self.farm_id,
+            self.transaction_id,
+            first_request,
+        )
+
+        self.assertEqual(first_delivery.items[0].quantity_delivered, Decimal("4"))
+        self.assertEqual(first_delivery.items[0].remaining_quantity, Decimal("6"))
+        self.assertEqual(first_delivery.items[0].batch_allocations, [])
+        self.assertEqual(inventory_service.movements[0]["quantity_delta"], Decimal("-4"))
+
+        fulfillment = await self.service.get_fulfillment(
+            self.farm_id,
+            self.transaction_id,
+        )
+        self.assertFalse(fulfillment.fully_delivered)
+        self.assertEqual(fulfillment.items[0].outstanding_quantity, Decimal("6"))
+
+    async def test_legacy_egg_sale_cannot_be_delivered_again(self):
+        product = SimpleNamespace(
+            id=self.product_id,
+            farm_id=self.farm_id,
+            name="Large eggs",
+            product_type=ProductType.EGGS,
+            is_active=True,
+        )
+        transaction = SimpleNamespace(
+            id=self.transaction_id,
+            farm_id=self.farm_id,
+            contact_id=None,
+            transaction_type=TransactionType.SALE,
+            status=TransactionStatus.COMPLETED,
+            fulfillment_required=False,
+            reference_number="SAL-EGGS-OLD",
+            items=[
+                SimpleNamespace(
+                    id=self.transaction_item_id,
+                    product_id=self.product_id,
+                    quantity=Decimal("10"),
+                    conversion_factor=Decimal("1"),
+                    chicken_type=None,
+                )
+            ],
+        )
+        self.service.transaction_repository.transaction = transaction
+        self.service.product_repository.products[self.product_id] = product
+        request = SaleDeliveryCreateRequest.model_validate(
+            {
+                "delivered_date": date(2026, 10, 9),
+                "items": [
+                    {
+                        "transaction_item_id": str(self.transaction_item_id),
+                        "quantity_delivered": 1,
+                    }
+                ],
+            }
+        )
+
+        with self.assertRaises(ConflictError):
+            await self.service.create_delivery(
+                self.farm_id,
+                self.transaction_id,
+                request,
+            )
+        self.assertEqual(self.delivery_repository.deliveries, [])
+        fulfillment = await self.service.get_fulfillment(
+            self.farm_id,
+            self.transaction_id,
+        )
+        self.assertTrue(fulfillment.fully_delivered)
+        self.assertEqual(
+            fulfillment.items[0].delivered_quantity,
+            Decimal("10"),
+        )
 
     async def test_rejects_delivery_beyond_cumulative_order_quantity(self):
         self.batch_block.quantity = 10

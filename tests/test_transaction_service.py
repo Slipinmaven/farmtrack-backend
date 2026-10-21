@@ -2,6 +2,7 @@ import unittest
 from datetime import UTC, date, datetime, time
 from decimal import Decimal
 from types import SimpleNamespace
+from typing import Any, cast
 from uuid import uuid4
 from unittest.mock import patch
 
@@ -92,6 +93,14 @@ class FakeActivityService:
 
     async def record(self, **event):
         self.events.append(event)
+
+
+class FakeInventoryService:
+    def __init__(self):
+        self.movements = []
+
+    async def append_movement(self, **movement):
+        self.movements.append(movement)
 
 
 class FakeTransactionRepository:
@@ -1015,6 +1024,29 @@ class TransactionServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sale.amount_paid, Decimal("500.00"))
         self.assertEqual(sale.balance_due, Decimal("1400.00"))
         self.assertEqual(sale.credit_balance, Decimal("0.00"))
+
+    async def test_delivery_tracked_egg_sale_defers_inventory_movement(self):
+        product = self.products[self.product_ids[0]]
+        product.product_type = ProductType.EGGS
+        inventory_service = FakeInventoryService()
+        self.service.inventory_service = cast(Any, inventory_service)
+        sale_data = TransactionCreate(
+            transaction_type=TransactionType.SALE,
+            transaction_date=date(2026, 10, 9),
+            fulfillment_required=True,
+            items=[
+                {
+                    "product_id": self.product_ids[0],
+                    "unit_id": self.unit_ids[0],
+                    "quantity": 12,
+                    "unit_price": Decimal("5.00"),
+                }
+            ],
+        )
+
+        await self.service.create_transaction(self.farm_id, sale_data)
+
+        self.assertEqual(inventory_service.movements, [])
 
     async def test_chicken_sale_service_builds_sale_for_multi_batch_block_request(self):
         class CapturingTransactionService:

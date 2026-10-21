@@ -154,6 +154,7 @@ class EggSaleServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(user_id, self.farm.owner_id)
         self.assertFalse(commit)
         self.assertEqual(transaction.transaction_type, TransactionType.SALE)
+        self.assertTrue(transaction.fulfillment_required)
         self.assertEqual(len(transaction.items), 2)
 
     async def test_split_payments_and_overpayment_are_passed_to_sale_transaction(self):

@@ -108,9 +108,16 @@ class SaleDeliveryService:
                     raise ResourceNotFoundError(
                         f"Product '{transaction_item.product_id}' does not exist."
                     )
-                if product.product_type != ProductType.CHICKENS:
+                if product.product_type not in {ProductType.CHICKENS, ProductType.EGGS}:
                     raise ConflictError(
-                        "Only chicken sales can be delivered through this flow."
+                        "Only chicken and egg sales can be delivered through this flow."
+                    )
+                if (
+                    product.product_type == ProductType.EGGS
+                    and not transaction.fulfillment_required
+                ):
+                    raise ConflictError(
+                        "This egg sale was recorded before delivery tracking was enabled."
                     )
 
                 ordered_quantity = self._ordered_quantity(transaction_item)
@@ -125,12 +132,31 @@ class SaleDeliveryService:
                 )
                 requested_quantity = Decimal(delivery_item.quantity_delivered)
                 if requested_quantity > remaining_quantity:
+                    item_name = (
+                        "chickens"
+                        if product.product_type == ProductType.CHICKENS
+                        else product.name
+                    )
                     raise ConflictError(
                         f"Delivery quantity exceeds the outstanding quantity of "
-                        f"{remaining_quantity} chickens for this sale item."
+                        f"{remaining_quantity} {item_name} for this sale item."
                     )
 
                 resolved_allocations = []
+                if (
+                    product.product_type == ProductType.CHICKENS
+                    and not delivery_item.batch_allocations
+                ):
+                    raise ConflictError(
+                        "Choose at least one batch and block for a chicken delivery."
+                    )
+                if (
+                    product.product_type == ProductType.EGGS
+                    and delivery_item.batch_allocations
+                ):
+                    raise ConflictError(
+                        "Egg deliveries do not use chicken batch allocations."
+                    )
                 for allocation in sorted(
                     delivery_item.batch_allocations,
                     key=lambda item: (str(item.batch_id), str(item.block_id)),
@@ -246,7 +272,8 @@ class SaleDeliveryService:
                         quantity_delta=-Decimal(saved_item.quantity),
                         movement_type=InventoryMovementType.SALE,
                         occurred_on=request.delivered_date,
-                        notes=delivery.notes or "Chicken sale delivery",
+                        notes=delivery.notes
+                        or f"{product.product_type.value.title()} sale delivery",
                         source_type="sale_delivery",
                         source_id=delivery.id,
                         source_item_id=saved_item.id,
@@ -400,12 +427,17 @@ class SaleDeliveryService:
                     raise ResourceNotFoundError(
                         f"Product '{transaction_item.product_id}' does not exist."
                     )
-                if product.product_type != ProductType.CHICKENS:
+                if product.product_type not in {ProductType.CHICKENS, ProductType.EGGS}:
                     continue
                 ordered_quantity = self._ordered_quantity(transaction_item)
-                delivered_quantity = delivered_quantities.get(
-                    transaction_item.id,
-                    Decimal("0"),
+                delivered_quantity = (
+                    ordered_quantity
+                    if product.product_type == ProductType.EGGS
+                    and not transaction.fulfillment_required
+                    else delivered_quantities.get(
+                        transaction_item.id,
+                        Decimal("0"),
+                    )
                 )
                 cancelled_quantity = cancelled_quantities.get(
                     transaction_item.id,
@@ -430,7 +462,7 @@ class SaleDeliveryService:
                     )
                 )
             if not response_items:
-                raise ConflictError("This sale has no chicken items to fulfill.")
+                raise ConflictError("This sale has no chicken or egg items to fulfill.")
             return SaleFulfillmentResponse(
                 transaction_id=transaction_id,
                 fully_delivered=all(
@@ -522,6 +554,6 @@ class SaleDeliveryService:
             or ordered_quantity != ordered_quantity.to_integral_value()
         ):
             raise ConflictError(
-                "The sale item does not represent a whole number of chickens."
+                "The sale item does not represent a whole number of deliverable units."
             )
         return ordered_quantity
