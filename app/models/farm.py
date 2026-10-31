@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from app.models.chicken_batches import ChickenBatch
     from app.models.contact import Contact
     from app.models.farm_settings import FarmSettings
+    from app.models.farm_membership import FarmMembership
     from app.models.products import Product
     from app.models.transactions import Transaction
 
@@ -91,4 +92,10 @@ class Farm(Base):
     )
     transactions: Mapped[list["Transaction"]] = relationship(
         back_populates="farm", lazy="raise", cascade="all, delete-orphan"
+    )
+    memberships: Mapped[list["FarmMembership"]] = relationship(
+        back_populates="farm",
+        lazy="raise",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
     )

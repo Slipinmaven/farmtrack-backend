@@ -5,7 +5,7 @@ from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt import PyJWTError
 from app.core.exceptions import AuthenticationError
-from app.core.request_context import auth_session_id_context
+from app.core.request_context import auth_session_id_context, auth_user_id_context
 from app.core.security import decode_access_token
 from app.dependencies.services import get_auth_service
 from app.models.user import User
@@ -38,7 +38,9 @@ async def get_current_user(
     user = await service.get_active_user(user_id, session_id)
     request.state.auth_session_id = session_id
     context_token = auth_session_id_context.set(session_id)
+    user_context_token = auth_user_id_context.set(user.id)
     try:
         yield user
     finally:
+        auth_user_id_context.reset(user_context_token)
         auth_session_id_context.reset(context_token)

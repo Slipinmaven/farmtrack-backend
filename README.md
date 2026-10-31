@@ -5,6 +5,7 @@ FarmTrack API is the FastAPI backend for the FarmTrack poultry farm management a
 ## Features
 
 - Authentication, refreshable sessions and device/session security controls.
+- Multiple users per farm with owner, manager and worker roles.
 - Farm settings, contacts, products, units, blocks and chicken batches.
 - Chicken purchases, receipts, sales, deliveries, returns, refunds and settlements.
 - Egg collections, losses and sales.
@@ -103,6 +104,24 @@ Settings are loaded from environment variables or a local `.env` file. Names are
 
 The full settings model and validation rules are in `app/core/config.py`.
 
+### Connection budget for multiple API instances
+
+SQLAlchemy creates a connection pool per API process. Budget for the maximum
+number of possible application connections with:
+
+```text
+API instances × processes per instance × (DATABASE_POOL_SIZE + DATABASE_MAX_OVERFLOW)
+```
+
+Add connections used by migrations, monitoring, admin tools, and background
+workers, and leave capacity below PostgreSQL's `max_connections` for maintenance
+and failover. The defaults allow up to 10 connections per process. The API logs
+that per-process ceiling at startup; compare it with your deployment's instance
+and worker count before scaling out. Monitor active/idle PostgreSQL connections,
+pool wait timeouts, and query latency. Reduce per-process pool limits or use a
+PostgreSQL connection pooler when the calculated budget approaches the database
+limit.
+
 ## Tests
 
 Run the complete backend test suite:
@@ -132,6 +151,14 @@ The test dependencies are kept separate from runtime dependencies in `requiremen
 - [`docs/database-schema.md`](docs/database-schema.md) — reference diagram and description of the current ORM schema.
 
 The schema document describes the models registered in the source tree; it is not a live database dump.
+
+Farm access is managed through `farm_memberships`. Owners can invite managers or
+workers; managers can invite and manage workers; workers can use farm
+operations but cannot edit farm settings, manage members, or delete the farm.
+Invitations are currently for existing active FarmTrack accounts and are
+accepted in-app through `GET /api/v1/farms/invitations` and
+`POST /api/v1/farms/invitations/{membership_id}/accept`. An email delivery
+integration is not included yet.
 
 ## Companion client
 

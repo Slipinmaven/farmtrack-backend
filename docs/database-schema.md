@@ -7,6 +7,8 @@ This reference is based on the SQLAlchemy models currently registered in `app.mo
 ```mermaid
 erDiagram
     USERS ||--o{ FARMS : owns
+    USERS ||--o{ FARM_MEMBERSHIPS : joins
+    FARMS ||--o{ FARM_MEMBERSHIPS : shares_with
     USERS ||--o{ REFRESH_TOKENS : has
     USERS ||--o{ USER_SESSIONS : signs_in_from
     USERS ||--o{ BLOCKED_DEVICES : blocks
@@ -56,6 +58,7 @@ erDiagram
 ### Identity and Security
 
 - `users`: `id` PK; `email` unique; `password_hash`; `is_active`; `last_login_at` nullable; timestamps.
+- `farm_memberships`: `id` PK; `farm_id` FK; `user_id` FK; `role` (`owner`, `manager`, or `worker`); `status` (`invited`, `active`, or `revoked`); nullable `invited_by_id` FK; `invited_at`; nullable `accepted_at` and `revoked_at`. Unique: (`farm_id`, `user_id`). Existing farm owners are backfilled as active `owner` memberships. Invited users must have an active FarmTrack account and accept the invitation before gaining access.
 - `refresh_tokens`: `id` PK; `user_id` FK; nullable `session_id` FK; unique `token_hash`; `expires_at`; `revoked_at` nullable; `replaced_by_token_id` nullable self-FK; timestamps.
 - `user_sessions`: `id` PK; `user_id` FK; hashed app-install `device_key`; device/platform/user-agent and network IP details; `created_at`; `last_seen_at`; nullable revocation time/reason.
 - `blocked_devices`: `id` PK; `user_id` FK; hashed app-install `device_key`; device name; permanent flag or nullable block expiry; timestamps. This blocks a registered app installation ID, not an attested hardware identity.
@@ -64,6 +67,12 @@ erDiagram
 ### Farm and Contacts
 
 - `farms`: `id` PK; `owner_id` FK; `name`; nullable `description`, `location`, `phone_number`, `email`, `maximum_chicken_capacity`; `is_active`; timestamps. Unique per owner: (`owner_id`, `name`).
+
+Farm membership roles are hierarchical for management, not for farm data
+isolation: all active roles can access farm-scoped operations; managers can
+also edit farm profile/settings and manage worker memberships; only owners can
+delete a farm or grant/revoke manager access. Every farm-scoped API request
+requires an active membership (or farm ownership).
 - `farm_settings`: `id` PK; unique `farm_id` FK; nullable colors, font, font scale, logo, currency, timezone; `theme_mode`; timestamps.
 - `contacts`: `id` PK; `farm_id` FK; `name`; nullable phone, email, address, notes; timestamps.
 - `contact_roles`: `id` PK; `contact_id` FK; `role`; timestamps. Unique: (`contact_id`, `role`).

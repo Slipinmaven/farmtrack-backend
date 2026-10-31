@@ -1,3 +1,4 @@
+from datetime import datetime, timezone
 from uuid import UUID
 from sqlalchemy import delete, select, or_
 from sqlalchemy.orm import selectinload
@@ -8,6 +9,7 @@ from app.models.batch_blocks import BatchBlock
 from app.models.blocks import Block
 from app.models.chicken_batches import ChickenBatch
 from app.models.farm import Farm
+from app.models.farm_membership import FarmMembership
 from app.models.farm_settings import FarmSettings
 from app.models.products import Product
 from app.models.product_units import ProductUnit
@@ -31,11 +33,28 @@ class FarmRepository:
         )
         return result.scalar_one_or_none()
 
-    async def get_user_farms(self, owner_id: UUID, search: str | None = None, is_active: bool | None = None) -> list[Farm]:
+    async def get_membership(
+        self,
+        farm_id: UUID,
+        user_id: UUID,
+    ) -> FarmMembership | None:
+        result = await self.session.execute(
+            select(FarmMembership).where(
+                FarmMembership.farm_id == farm_id,
+                FarmMembership.user_id == user_id,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def get_user_farms(self, user_id: UUID, search: str | None = None, is_active: bool | None = None) -> list[Farm]:
         query = (
             select(Farm)
             .options(selectinload(Farm.farm_settings))
-            .where(Farm.owner_id == owner_id)
+            .join(FarmMembership, FarmMembership.farm_id == Farm.id)
+            .where(
+                FarmMembership.user_id == user_id,
+                FarmMembership.status == "active",
+            )
         )
 
         if search is not None:
@@ -60,6 +79,15 @@ class FarmRepository:
         farm = Farm(**farm_data)
         self.session.add(farm)
         await self.session.flush() 
+        self.session.add(
+            FarmMembership(
+                farm_id=farm.id,
+                user_id=farm.owner_id,
+                role="owner",
+                status="active",
+                accepted_at=datetime.now(timezone.utc),
+            )
+        )
         return farm
 
     async def update(self, farm: Farm) -> Farm:

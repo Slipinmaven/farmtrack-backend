@@ -11,6 +11,19 @@ class ThemeMode(StrEnum):
     DARK = "dark"
     SYSTEM = "system"
 
+
+class FarmRole(StrEnum):
+    OWNER = "owner"
+    MANAGER = "manager"
+    WORKER = "worker"
+
+
+class FarmMembershipStatus(StrEnum):
+    INVITED = "invited"
+    ACTIVE = "active"
+    REVOKED = "revoked"
+
+
 class ProductType(StrEnum):
     EGGS = "eggs"
     CHICKENS = "chickens"

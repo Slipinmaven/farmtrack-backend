@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from app.core.exceptions import InvalidActivityCursorError, ResourceNotFoundError
-from app.core.request_context import auth_session_id_context
+from app.core.request_context import auth_session_id_context, auth_user_id_context
 from app.core.unit_of_work import UnitOfWork
 from app.models.activities import Activity
 from app.models.farm import Farm
@@ -46,7 +46,7 @@ class ActivityService:
     ) -> Activity:
         activity = Activity(
             farm_id=farm_id,
-            user_id=user_id,
+            user_id=auth_user_id_context.get() or user_id,
             session_id=auth_session_id_context.get(),
             type=activity_type,
             entity_type=entity_type,

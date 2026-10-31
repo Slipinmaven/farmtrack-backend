@@ -1,6 +1,7 @@
 from app.core.database import Base
 from app.models.app_security_settings import AppSecuritySettings
 from app.models.farm import Farm
+from app.models.farm_membership import FarmMembership
 from app.models.refresh_token import RefreshToken
 from app.models.user_session import UserSession
 from app.models.blocked_device import BlockedDevice
@@ -62,6 +63,7 @@ __all__ = [
     "Base",
     "AppSecuritySettings",
     "Farm",
+    "FarmMembership",
     "RefreshToken",
     "UserSession",
     "BlockedDevice",

@@ -8,6 +8,7 @@ from app.repositories.contact_repository import ContactRepository
 from app.repositories.contact_role_repository import ContactRoleRepository
 from app.repositories.contact_role_product_repository import ContactRoleProductRepository
 from app.repositories.farm_repository import FarmRepository
+from app.repositories.farm_membership_repository import FarmMembershipRepository
 from app.repositories.refresh_token_repository import RefreshTokenRepository
 from app.repositories.user_session_repository import UserSessionRepository
 from app.repositories.user_repository import UserRepository
@@ -69,6 +70,7 @@ from app.services.block_service import BlockService
 from app.services.contact_service import ContactService
 from app.services.contact_history_service import ContactHistoryService
 from app.services.farm_service import FarmService
+from app.services.farm_membership_service import FarmMembershipService
 from app.services.security_settings_service import SecuritySettingsService
 from app.services.unit_service import UnitService
 from app.services.product_service import ProductService
@@ -129,6 +131,17 @@ def get_farm_repository(
     unit_of_work: UnitOfWork = Depends(get_unit_of_work),
 ) -> FarmRepository:
     return FarmRepository(session=unit_of_work.session)
+
+
+def get_farm_membership_service(
+    unit_of_work: UnitOfWork = Depends(get_unit_of_work),
+) -> FarmMembershipService:
+    session = unit_of_work.session
+    return FarmMembershipService(
+        membership_repository=FarmMembershipRepository(session),
+        user_repository=UserRepository(session),
+        unit_of_work=unit_of_work,
+    )
 
 
 def get_activity_service(

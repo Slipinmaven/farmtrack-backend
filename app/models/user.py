@@ -11,6 +11,7 @@ if TYPE_CHECKING:
     from app.models.app_security_settings import AppSecuritySettings
     from app.models.activities import Activity
     from app.models.farm import Farm
+    from app.models.farm_membership import FarmMembership
     from app.models.refresh_token import RefreshToken
 
 class User(Base):
@@ -47,6 +48,12 @@ class User(Base):
     )
     activities: Mapped[list["Activity"]] = relationship(
         back_populates="user",
+        lazy="raise",
+        passive_deletes=True,
+    )
+    farm_memberships: Mapped[list["FarmMembership"]] = relationship(
+        back_populates="user",
+        foreign_keys="FarmMembership.user_id",
         lazy="raise",
         passive_deletes=True,
     )

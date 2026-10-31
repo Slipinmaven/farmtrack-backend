@@ -8,7 +8,7 @@ from starlette import status
 
 from app.api.v1.endpoints import farm as farm_endpoint
 from app.core.exception_handlers import register_exception_handlers
-from app.dependencies.farm import get_owned_farm
+from app.dependencies.farm import get_farm_manager
 from app.dependencies.services import get_farm_service
 from app.schemas.farm import FarmSettingsResponse
 from app.services.farm_logo_storage import FarmLogoStorage
@@ -55,7 +55,7 @@ def create_test_client(tmp_path, monkeypatch):
     app = FastAPI()
     register_exception_handlers(app)
     app.include_router(farm_endpoint.router)
-    app.dependency_overrides[get_owned_farm] = lambda: farm
+    app.dependency_overrides[get_farm_manager] = lambda: farm
     app.dependency_overrides[get_farm_service] = lambda: service
     return TestClient(app), service, farm
 

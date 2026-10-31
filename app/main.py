@@ -51,7 +51,17 @@ def _request_id(request: Request) -> str:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     configure_logging()
-    logger.info("application_started", extra={"request_id": "-"})
+    logger.info(
+        "application_started",
+        extra={
+            "request_id": "-",
+            "database_pool_size": settings.database_pool_size,
+            "database_max_overflow": settings.database_max_overflow,
+            "database_connections_per_process": (
+                settings.database_pool_size + settings.database_max_overflow
+            ),
+        },
+    )
     worker_task = asyncio.create_task(_notification_worker_loop())
     try:
         yield
