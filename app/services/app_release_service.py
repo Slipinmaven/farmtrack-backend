@@ -66,6 +66,21 @@ class AppReleaseService:
     async def list_releases(self) -> list[AppRelease]:
         return await self.releases.list_releases()
 
+    async def list_github_release_assets(
+        self,
+        tag: str,
+    ) -> list[dict[str, int | str]]:
+        return await self.storage_service.list_release_assets(tag)
+
+    async def list_download_invitations(
+        self,
+        release_id: UUID,
+    ) -> list[DownloadToken]:
+        release = await self.releases.get_release(release_id)
+        if release is None:
+            raise ResourceNotFoundError("App release not found.")
+        return await self.tokens.list_for_release(release_id)
+
     async def revoke_download_invitation(self, token_id: UUID) -> None:
         token = await self.tokens.get_by_id_for_update(token_id)
         if token is None:

@@ -1,11 +1,11 @@
 import re
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -66,7 +66,9 @@ class Settings(BaseSettings):
     smtp_password: SecretStr | None = None
     smtp_from_email: str | None = None
     farmtrack_app_url: str = "farmtrack://farm-team"
-    app_release_admin_emails: list[str] = Field(default_factory=list)
+    app_release_admin_emails: Annotated[list[str], NoDecode] = Field(
+        default_factory=list
+    )
     github_release_repository: str | None = None
     github_release_token: SecretStr | None = None
     app_public_base_url: str | None = None

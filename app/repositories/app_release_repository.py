@@ -71,6 +71,14 @@ class DownloadTokenRepository:
         )
         return result.scalar_one_or_none()
 
+    async def list_for_release(self, release_id: UUID) -> list[DownloadToken]:
+        result = await self.session.execute(
+            select(DownloadToken)
+            .where(DownloadToken.release_id == release_id)
+            .order_by(DownloadToken.created_at.desc())
+        )
+        return list(result.scalars().all())
+
     async def get_with_release_for_update(self, token_hash: str) -> DownloadToken | None:
         result = await self.session.execute(
             select(DownloadToken)

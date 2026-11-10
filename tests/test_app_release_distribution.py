@@ -22,6 +22,22 @@ from app.services.app_release_service import AppReleaseService
 from app.services.github_release_storage_service import GitHubReleaseStorageService
 
 
+def test_release_admin_emails_parse_comma_separated_environment_value(monkeypatch):
+    monkeypatch.setenv("DATABASE_URL", "postgresql+asyncpg://user:pass@localhost/db")
+    monkeypatch.setenv("JWT_SECRET_KEY", "a" * 32)
+    monkeypatch.setenv(
+        "APP_RELEASE_ADMIN_EMAILS",
+        "farmtrack.team@gmail.com, SECOND@example.com",
+    )
+
+    configured = Settings(_env_file=None)
+
+    assert configured.app_release_admin_emails == [
+        "farmtrack.team@gmail.com",
+        "second@example.com",
+    ]
+
+
 class FakeSession:
     def __init__(self):
         self.added = []

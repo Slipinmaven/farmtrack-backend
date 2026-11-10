@@ -34,8 +34,28 @@ class AppReleaseResponse(BaseModel):
     updated_at: datetime
 
 
+class GitHubReleaseAssetResponse(BaseModel):
+    asset_id: int
+    file_name: str
+    file_size: int
+
+
 class DownloadInvitationRequest(BaseModel):
     recipient_email: EmailStr
+
+
+class DownloadInvitationRecordResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    release_id: UUID
+    recipient_email: EmailStr
+    delivery_status: Literal["pending", "sent", "failed"]
+    expires_at: datetime
+    revoked_at: datetime | None
+    created_at: datetime
+    last_accessed_at: datetime | None
+    access_count: int
 
 
 class DownloadInvitationResponse(BaseModel):

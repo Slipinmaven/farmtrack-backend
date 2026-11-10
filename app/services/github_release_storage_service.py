@@ -73,6 +73,65 @@ class GitHubReleaseStorageService:
             )
         return name, size
 
+    async def list_release_assets(self, tag: str) -> list[dict[str, int | str]]:
+        owner, repository, token = self._configuration()
+        url = (
+            f"{self.api_base_url}/repos/{quote(owner, safe='')}/"
+            f"{quote(repository, safe='')}/releases/tags/{quote(tag, safe='')}"
+        )
+        try:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(15.0)) as client:
+                response = await client.get(
+                    url,
+                    headers=self._headers(token, "application/vnd.github+json"),
+                )
+        except httpx.RequestError as exc:
+            raise self._unavailable("Could not retrieve the GitHub release.") from exc
+
+        if response.status_code == 404:
+            raise AppError(
+                "GITHUB_RELEASE_NOT_FOUND",
+                "That published GitHub release could not be found.",
+                404,
+            )
+        if response.status_code != 200:
+            raise self._unavailable("Could not retrieve the GitHub release.")
+
+        try:
+            release = response.json()
+            assets = release["assets"]
+            is_draft = release["draft"]
+        except (ValueError, KeyError, TypeError) as exc:
+            raise self._unavailable(
+                "GitHub returned invalid release information."
+            ) from exc
+        if is_draft or not isinstance(assets, list):
+            raise AppError(
+                "GITHUB_RELEASE_NOT_PUBLISHED",
+                "Publish the GitHub release before registering its APK.",
+                409,
+            )
+
+        apk_assets: list[dict[str, int | str]] = []
+        for asset in assets:
+            if not isinstance(asset, dict):
+                continue
+            asset_id = asset.get("id")
+            name = asset.get("name")
+            size = asset.get("size")
+            if (
+                isinstance(asset_id, int)
+                and asset_id > 0
+                and self._is_apk_name(name)
+                and asset.get("state") == "uploaded"
+                and isinstance(size, int)
+                and 0 < size <= 2_147_483_647
+            ):
+                apk_assets.append(
+                    {"asset_id": asset_id, "file_name": name, "file_size": size}
+                )
+        return apk_assets
+
     async def create_download_response(
         self,
         asset_id: int,

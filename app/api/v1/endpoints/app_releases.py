@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Path, Response, status
+from fastapi import APIRouter, Depends, Path, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import Response
 
@@ -10,8 +10,10 @@ from app.models.user import User
 from app.schemas.app_release import (
     AppReleaseCreate,
     AppReleaseResponse,
+    DownloadInvitationRecordResponse,
     DownloadInvitationRequest,
     DownloadInvitationResponse,
+    GitHubReleaseAssetResponse,
 )
 from app.services.app_release_service import AppReleaseService
 
@@ -42,6 +44,41 @@ async def list_app_releases(
 ) -> list[AppReleaseResponse]:
     releases = await AppReleaseService(session).list_releases()
     return [AppReleaseResponse.model_validate(release) for release in releases]
+
+
+@router.get(
+    "/app-releases/github-assets",
+    response_model=list[GitHubReleaseAssetResponse],
+)
+async def list_github_release_assets(
+    tag: str = Query(
+        min_length=1,
+        max_length=100,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._-]*$",
+    ),
+    _admin: User = Depends(require_app_release_admin),
+    session: AsyncSession = Depends(get_database_session),
+) -> list[GitHubReleaseAssetResponse]:
+    assets = await AppReleaseService(session).list_github_release_assets(tag)
+    return [GitHubReleaseAssetResponse.model_validate(asset) for asset in assets]
+
+
+@router.get(
+    "/app-releases/{release_id}/invitations",
+    response_model=list[DownloadInvitationRecordResponse],
+)
+async def list_app_release_invitations(
+    release_id: UUID,
+    _admin: User = Depends(require_app_release_admin),
+    session: AsyncSession = Depends(get_database_session),
+) -> list[DownloadInvitationRecordResponse]:
+    invitations = await AppReleaseService(session).list_download_invitations(
+        release_id
+    )
+    return [
+        DownloadInvitationRecordResponse.model_validate(invitation)
+        for invitation in invitations
+    ]
 
 
 @router.post(
