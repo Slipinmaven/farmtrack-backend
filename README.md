@@ -156,12 +156,12 @@ account emails.
 
 Release administrators can search active registered users, select multiple
 recipients, and invite by email, WhatsApp, or both. Email is sent by the
-configured SMTP service. WhatsApp invitations use a prepared click-to-send
-message for a linked farm phone number; the administrator must review and send
-the message in WhatsApp. Administrators can also prepare an invitation for any
-phone number directly. Farm and manually entered phone numbers need an
-international country code. Apply the latest Alembic migrations before using
-these recipient and WhatsApp features.
+configured SMTP service. WhatsApp invitations include the release version,
+release notes, and a private download link in a prepared click-to-send message.
+Administrators can also prepare an invitation for any phone number directly.
+Farm and manually entered phone numbers need an international country code.
+Apply the latest Alembic migrations before using these recipient and WhatsApp
+features.
 
 To publish a mobile build, increment `expo.version` in `app.json` in the
 separate mobile repository, then run this command from that repository:

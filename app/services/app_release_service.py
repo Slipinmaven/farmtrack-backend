@@ -250,16 +250,16 @@ class AppReleaseService:
             f"{settings.app_public_base_url.rstrip('/')}"
             f"/api/v1/downloads/{raw_token}"
         )
-        message = (
-            f"FarmTrack for Android version {release.version} is ready. "
-            f"Download it using this private link: {download_url}"
-        )
+        share_message = self._release_invitation_message(release)
+        whatsapp_message = f"{share_message}\n{download_url}"
         return WhatsAppInvitationResponse(
             id=token.id,
             recipient_phone=phone,
             delivery_channel="whatsapp",
             delivery_status="prepared",
-            whatsapp_url=f"https://wa.me/{phone}?text={quote(message)}",
+            whatsapp_url=f"https://wa.me/{phone}?text={quote(whatsapp_message)}",
+            share_message=share_message,
+            download_url=download_url,
             expires_at=expires_at,
         )
 
@@ -352,8 +352,7 @@ class AppReleaseService:
             whatsapp_url = None
             if wants_whatsapp_for_recipient:
                 message = (
-                    f"FarmTrack for Android version {release.version} is ready. "
-                    f"Download it using this private link: {download_url}"
+                    f"{self._release_invitation_message(release)}\n{download_url}"
                 )
                 whatsapp_url = (
                     f"https://wa.me/{whatsapp_phone}?text={quote(message)}"
@@ -413,6 +412,20 @@ class AppReleaseService:
                 )
             )
         return results
+
+    @staticmethod
+    def _release_invitation_message(release: AppRelease) -> str:
+        message_parts = [
+            "Hi! 👋 I’d like to invite you to try FarmTrack, an Android app "
+            "for managing your farm.",
+            f"Version {release.version} is ready to download.",
+        ]
+        if release.release_notes:
+            message_parts.extend(["", "What’s new:", release.release_notes.strip()])
+        message_parts.extend(
+            ["", "Use your private download link below to install FarmTrack:"]
+        )
+        return "\n".join(message_parts)
 
     @staticmethod
     def _whatsapp_phone(phone: str, email: str) -> str:

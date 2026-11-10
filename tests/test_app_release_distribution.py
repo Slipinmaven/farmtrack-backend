@@ -427,11 +427,15 @@ async def test_whatsapp_invitation_returns_link_and_persists_prepared_token(monk
 
     token = session.added[0]
     wa_url = urlsplit(results[0].whatsapp_url)
-    download_url = parse_qs(wa_url.query)["text"][0].split()[-1]
+    message = parse_qs(wa_url.query)["text"][0]
+    download_url = message.split()[-1]
     raw_token = download_url.rsplit("/", 1)[-1]
     assert results[0].email_status == "not_requested"
     assert wa_url.netloc == "wa.me"
     assert wa_url.path == "/254712345678"
+    assert "Hi! 👋" in message
+    assert "Version 1.2.3" in message
+    assert "What’s new:\nBug fixes" in message
     assert token.delivery_channel == "whatsapp"
     assert token.delivery_status == "prepared"
     assert token.token_hash == hashlib.sha256(raw_token.encode()).hexdigest()
@@ -462,6 +466,13 @@ async def test_custom_whatsapp_number_prepares_link_without_email(monkeypatch):
     raw_token = message.split()[-1].rsplit("/", 1)[-1]
     assert invitation.recipient_phone == "254712345678"
     assert invitation.delivery_status == "prepared"
+    assert "FarmTrack" in invitation.share_message
+    assert f"Version {release.version}" in invitation.share_message
+    assert "What’s new:" in invitation.share_message
+    assert invitation.download_url == (
+        f"https://api.farmtrack.example/api/v1/downloads/{raw_token}"
+    )
+    assert invitation.download_url in message
     assert wa_url.netloc == "wa.me"
     assert wa_url.path == "/254712345678"
     assert token.recipient_email is None

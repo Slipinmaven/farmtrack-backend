@@ -77,6 +77,8 @@ class WhatsAppInvitationResponse(BaseModel):
     delivery_channel: Literal["whatsapp"]
     delivery_status: Literal["prepared"]
     whatsapp_url: str
+    share_message: str
+    download_url: str
     expires_at: datetime
 
 
