@@ -4,7 +4,7 @@ from urllib.parse import parse_qs
 
 from fastapi import APIRouter, Depends, Path, Query, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from starlette.responses import FileResponse, HTMLResponse
+from starlette.responses import FileResponse, HTMLResponse, RedirectResponse
 
 from app.core.database import get_database_session
 from app.dependencies.app_release import require_app_release_admin
@@ -258,7 +258,16 @@ async def download_app(
         )
     fields = parse_qs(body.decode("utf-8", errors="replace"))
     password = fields.get("password", [""])[0]
-    return await service.create_download_response(token, password=password)
+    download_response = await service.create_download_response(
+        token,
+        password=password,
+    )
+    if isinstance(download_response, RedirectResponse):
+        download_url = download_response.headers.get("location")
+        if download_url is None:
+            return download_response
+        return service.create_download_success_page(download_url)
+    return download_response
 
 
 @router.get(

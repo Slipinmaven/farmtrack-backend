@@ -454,9 +454,24 @@ class AppReleaseService:
     button {{ width: 100%; min-height: 48px; margin-top: 14px; border: 0;
       border-radius: 10px; background: #26734a; color: white; font: inherit;
       font-weight: 700; cursor: pointer; }}
+    button:disabled {{ cursor: wait; opacity: .85; }}
+    .button-content {{ display: inline-flex; align-items: center; gap: 10px; }}
+    .spinner {{ display: none; width: 18px; height: 18px; border: 2px solid #ffffff66;
+      border-top-color: white; border-radius: 50%; }}
+    button.is-loading .spinner {{ display: inline-block; animation: spin .75s linear infinite; }}
+    .form-status {{ min-height: 24px; margin: 12px 0 0; color: #26734a;
+      font-size: 14px; font-weight: 650; }}
     .error {{ padding: 10px 12px; border-radius: 9px; background: #fff1ef;
-      color: #a13e39; font-size: 14px; }}
+      color: #a13e39; font-size: 14px; animation: reject .45s ease both; }}
     .hint {{ margin-bottom: 0; font-size: 13px; }}
+    @keyframes spin {{ to {{ transform: rotate(360deg); }} }}
+    @keyframes reject {{ 0%, 100% {{ transform: translateX(0); }}
+      20%, 60% {{ transform: translateX(-6px); }}
+      40%, 80% {{ transform: translateX(6px); }} }}
+    @media (prefers-reduced-motion: reduce) {{
+      *, *::before, *::after {{ animation-duration: .01ms !important;
+        animation-iteration-count: 1 !important; scroll-behavior: auto !important; }}
+    }}
   </style>
 </head>
 <body>
@@ -470,10 +485,31 @@ class AppReleaseService:
       <input id="password" name="password" type="password" required
         minlength="16" maxlength="16" autocapitalize="characters"
         autocomplete="one-time-code" autofocus>
-      <button type="submit">Verify and download APK</button>
+      <button id="submit-button" type="submit">
+        <span class="button-content"><span class="spinner" aria-hidden="true"></span>
+          <span id="button-label">Verify and download APK</span></span>
+      </button>
+      <p class="form-status" id="form-status" role="status" aria-live="polite"></p>
     </form>
     <p class="hint">Ask the person who sent this link for the separate password.</p>
   </main>
+  <script>
+    const form = document.querySelector("form");
+    const button = document.querySelector("#submit-button");
+    const buttonLabel = document.querySelector("#button-label");
+    const formStatus = document.querySelector("#form-status");
+    form.addEventListener("submit", (event) => {{
+      if (form.dataset.submitting === "true") {{
+        event.preventDefault();
+        return;
+      }}
+      form.dataset.submitting = "true";
+      button.disabled = true;
+      button.classList.add("is-loading");
+      buttonLabel.textContent = "Verifying…";
+      formStatus.textContent = "Checking your invitation password";
+    }});
+  </script>
 </body>
 </html>"""
         return HTMLResponse(
@@ -481,6 +517,70 @@ class AppReleaseService:
             status_code=status_code,
             headers={"Cache-Control": "no-store"},
         )
+
+    @staticmethod
+    def create_download_success_page(download_url: str) -> HTMLResponse:
+        safe_download_url = html.escape(download_url, quote=True)
+        document = f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <meta http-equiv="refresh" content="1.2;url={safe_download_url}">
+  <title>Password verified - FarmTrack</title>
+  <style>
+    * {{ box-sizing: border-box; }}
+    body {{ margin: 0; min-height: 100vh; display: grid; place-items: center;
+      padding: 24px; background: #f2f6f2; color: #23392b;
+      font: 16px system-ui, sans-serif; }}
+    main {{ width: min(100%, 440px); padding: 34px 28px; border: 1px solid #dce8df;
+      border-radius: 20px; background: white; text-align: center;
+      box-shadow: 0 16px 48px #173d2b18; animation: arrive .4s ease both; }}
+    .success-icon {{ width: 72px; height: 72px; margin: 0 auto 20px;
+      color: #26734a; }}
+    .success-icon circle {{ stroke-dasharray: 190; stroke-dashoffset: 190;
+      animation: draw-circle .55s ease-out .1s forwards; }}
+    .success-icon path {{ stroke-dasharray: 40; stroke-dashoffset: 40;
+      animation: draw-check .35s ease-out .55s forwards; }}
+    .brand {{ color: #26734a; font-size: 13px; font-weight: 800;
+      letter-spacing: 1.5px; text-transform: uppercase; }}
+    h1 {{ margin: 12px 0 8px; font-size: 25px; }}
+    p {{ color: #617166; line-height: 1.55; }}
+    a {{ display: inline-flex; justify-content: center; align-items: center;
+      min-height: 48px; width: 100%; margin-top: 12px; border-radius: 10px;
+      background: #26734a; color: white; font-weight: 700; text-decoration: none; }}
+    @keyframes arrive {{ from {{ opacity: 0; transform: translateY(10px) scale(.98); }}
+      to {{ opacity: 1; transform: translateY(0) scale(1); }} }}
+    @keyframes draw-circle {{ to {{ stroke-dashoffset: 0; }} }}
+    @keyframes draw-check {{ to {{ stroke-dashoffset: 0; }} }}
+    @media (prefers-reduced-motion: reduce) {{
+      *, *::before, *::after {{ animation-duration: .01ms !important;
+        animation-iteration-count: 1 !important; }}
+    }}
+  </style>
+</head>
+<body>
+  <main>
+    <svg class="success-icon" viewBox="0 0 72 72" fill="none"
+      aria-hidden="true">
+      <circle cx="36" cy="36" r="30" stroke="currentColor" stroke-width="4"/>
+      <path d="M22 37l9 9 19-20" stroke="currentColor" stroke-width="4"
+        stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    <div class="brand">FarmTrack</div>
+    <h1>Password verified</h1>
+    <p>Your invitation is valid. Your APK download is starting.</p>
+    <a id="download-link" href="{safe_download_url}">Continue to download</a>
+  </main>
+  <script>
+    window.setTimeout(() => {{
+      window.location.replace(document.querySelector("#download-link").href);
+    }}, 1100);
+  </script>
+</body>
+</html>"""
+        return HTMLResponse(document, headers={"Cache-Control": "no-store"})
 
     async def send_bulk_download_invitations(
         self,

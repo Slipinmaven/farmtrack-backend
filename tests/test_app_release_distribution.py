@@ -977,6 +977,9 @@ async def test_download_rejects_incorrect_password_without_tracking_access(monke
 
     assert response.status_code == 401
     assert "That password is incorrect" in response.body.decode()
+    assert "animation: reject" in response.body.decode()
+    assert 'form.dataset.submitting === "true"' in response.body.decode()
+    assert "button.disabled = true" in response.body.decode()
     assert storage.downloaded == []
     assert token.access_count == 0
     assert session.commits == 0
@@ -1186,6 +1189,9 @@ async def test_download_endpoint_returns_storage_response(monkeypatch):
             assert password == "ABCD2345EFGH6789"
             return RedirectResponse("https://github.com/downloads/farmtrack.apk")
 
+        def create_download_success_page(self, download_url):
+            return AppReleaseService.create_download_success_page(download_url)
+
     monkeypatch.setattr(app_releases, "AppReleaseService", DownloadService)
 
     async def receive():
@@ -1216,5 +1222,11 @@ async def test_download_endpoint_returns_storage_response(monkeypatch):
         session=FakeSession(),
     )
 
-    assert response.status_code == 307
-    assert response.headers["location"] == "https://github.com/downloads/farmtrack.apk"
+    assert response.status_code == 200
+    assert response.headers["cache-control"] == "no-store"
+    assert "Password verified" in response.body.decode()
+    assert (
+        'href="https://github.com/downloads/farmtrack.apk"'
+        in response.body.decode()
+    )
+    assert "window.location.replace" in response.body.decode()
