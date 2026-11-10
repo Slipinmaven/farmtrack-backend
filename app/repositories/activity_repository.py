@@ -205,54 +205,15 @@ class ActivityRepository:
         from_datetime: datetime | None = None,
         to_datetime: datetime | None = None,
     ) -> list[Activity]:
-        query = select(Activity).where(Activity.farm_id == farm_id)
-        if from_datetime is not None:
-            query = query.where(Activity.created_at >= from_datetime)
-        if to_datetime is not None:
-            query = query.where(Activity.created_at < to_datetime)
-        if category == ActivityCategory.UPDATES:
-            query = query.where(Activity.type == ActivityType.NOTIFICATION_CREATED)
-        elif category in (ActivityCategory.SALES, ActivityCategory.PURCHASES):
-            transaction_type = (
-                "sale" if category == ActivityCategory.SALES else "purchase"
+        query = select(Activity).where(
+            *self._farm_activity_filters(
+                farm_id,
+                search,
+                category,
+                from_datetime,
+                to_datetime,
             )
-            entity_types = (
-                CATEGORY_ENTITY_TYPES[ActivityCategory.SALES]
-                if category == ActivityCategory.SALES
-                else CATEGORY_ENTITY_TYPES[ActivityCategory.PURCHASES]
-            )
-            query = query.where(
-                or_(
-                    Activity.entity_type.in_(entity_types),
-                    and_(
-                        Activity.entity_type.in_(
-                            (
-                                ActivityEntityType.TRANSACTION,
-                                ActivityEntityType.TRANSACTION_PAYMENT,
-                            )
-                        ),
-                        Activity.details["transaction_type"].as_string()
-                        == transaction_type,
-                    ),
-                )
-            )
-        elif category is not None:
-            query = query.where(
-                Activity.entity_type.in_(CATEGORY_ENTITY_TYPES[category])
-            )
-        if search:
-            search_term = f"%{'%'.join(search.split())}%"
-            query = query.where(
-                or_(
-                    func.replace(cast(Activity.type, String), "_", " ").ilike(
-                        search_term
-                    ),
-                    func.replace(
-                        cast(Activity.entity_type, String), "_", " "
-                    ).ilike(search_term),
-                    cast(Activity.details, String).ilike(search_term),
-                )
-            )
+        )
         if before is not None:
             created_at, activity_id = before
             query = query.where(
@@ -268,6 +229,87 @@ class ActivityRepository:
             query.order_by(desc(Activity.created_at), desc(Activity.id)).limit(limit)
         )
         return list(result.scalars().all())
+
+    async def count_for_farm(
+        self,
+        farm_id: UUID,
+        search: str | None = None,
+        category: ActivityCategory | None = None,
+        from_datetime: datetime | None = None,
+        to_datetime: datetime | None = None,
+    ) -> int:
+        result = await self.session.execute(
+            select(func.count())
+            .select_from(Activity)
+            .where(
+                *self._farm_activity_filters(
+                    farm_id,
+                    search,
+                    category,
+                    from_datetime,
+                    to_datetime,
+                )
+            )
+        )
+        return int(result.scalar_one())
+
+    @staticmethod
+    def _farm_activity_filters(
+        farm_id: UUID,
+        search: str | None,
+        category: ActivityCategory | None,
+        from_datetime: datetime | None,
+        to_datetime: datetime | None,
+    ):
+        filters = [Activity.farm_id == farm_id]
+        if from_datetime is not None:
+            filters.append(Activity.created_at >= from_datetime)
+        if to_datetime is not None:
+            filters.append(Activity.created_at < to_datetime)
+        if category == ActivityCategory.UPDATES:
+            filters.append(Activity.type == ActivityType.NOTIFICATION_CREATED)
+        elif category in (ActivityCategory.SALES, ActivityCategory.PURCHASES):
+            transaction_type = (
+                "sale" if category == ActivityCategory.SALES else "purchase"
+            )
+            entity_types = (
+                CATEGORY_ENTITY_TYPES[ActivityCategory.SALES]
+                if category == ActivityCategory.SALES
+                else CATEGORY_ENTITY_TYPES[ActivityCategory.PURCHASES]
+            )
+            filters.append(
+                or_(
+                    Activity.entity_type.in_(entity_types),
+                    and_(
+                        Activity.entity_type.in_(
+                            (
+                                ActivityEntityType.TRANSACTION,
+                                ActivityEntityType.TRANSACTION_PAYMENT,
+                            )
+                        ),
+                        Activity.details["transaction_type"].as_string()
+                        == transaction_type,
+                    ),
+                )
+            )
+        elif category is not None:
+            filters.append(
+                Activity.entity_type.in_(CATEGORY_ENTITY_TYPES[category])
+            )
+        if search:
+            search_term = f"%{'%'.join(search.split())}%"
+            filters.append(
+                or_(
+                    func.replace(cast(Activity.type, String), "_", " ").ilike(
+                        search_term
+                    ),
+                    func.replace(
+                        cast(Activity.entity_type, String), "_", " "
+                    ).ilike(search_term),
+                    cast(Activity.details, String).ilike(search_term),
+                )
+            )
+        return filters
 
     async def list_for_session(
         self,

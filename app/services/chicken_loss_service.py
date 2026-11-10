@@ -142,10 +142,13 @@ class ChickenLossService:
                     product_ids = {
                         item.transaction_item.product_id for item in source_items
                     }
-                    if not product_ids and getattr(
-                        batches[batch_id], "is_opening_stock", False
-                    ):
-                        continue
+                    batch_product_id = getattr(batches[batch_id], "product_id", None)
+                    if batch_product_id is not None:
+                        if product_ids and product_ids != {batch_product_id}:
+                            raise ConflictError(
+                                f"Chicken batch '{batches[batch_id].name}' has conflicting product links."
+                            )
+                        product_ids.add(batch_product_id)
                     if len(product_ids) != 1:
                         raise ConflictError(
                             "This chicken batch is not linked to exactly one chicken product; "

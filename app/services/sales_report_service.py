@@ -4,8 +4,12 @@ from uuid import UUID
 from app.core.unit_of_work import UnitOfWork
 from app.models.transaction_items import TransactionItem
 from app.repositories.transaction_repository import TransactionRepository
-from app.schemas.enums import TransactionStatus
+from app.schemas.enums import ProductType, TransactionStatus
 from app.schemas.sales_report import (
+    PendingSaleDelivery,
+    PendingSaleDeliveryItem,
+    OutstandingBalanceSummary,
+    OutstandingTransactionBalance,
     SalesReportFilters,
     SalesReportDay,
     SalesReportItem,
@@ -85,12 +89,41 @@ class SalesReportService:
                     ),
                     Decimal("0.00"),
                 )
+                settlement_adjustment = get_settlement_adjustment(transaction)
+                goods_settlement = sum(
+                    (
+                        Decimal(line["value"])
+                        * (
+                            Decimal("1.00")
+                            if settlement.direction == "contact_to_farm"
+                            else Decimal("-1.00")
+                        )
+                        for settlement in getattr(transaction, "settlements", ())
+                        for line in settlement.lines
+                        if line["kind"] == "goods"
+                    ),
+                    Decimal("0.00"),
+                )
+                service_settlement = sum(
+                    (
+                        Decimal(line["value"])
+                        * (
+                            Decimal("1.00")
+                            if settlement.direction == "contact_to_farm"
+                            else Decimal("-1.00")
+                        )
+                        for settlement in getattr(transaction, "settlements", ())
+                        for line in settlement.lines
+                        if line["kind"] == "service"
+                    ),
+                    Decimal("0.00"),
+                )
                 balance = calculate_transaction_balance(
                     total,
                     paid,
                     refunded,
                     return_credits,
-                    settlement_adjustment=get_settlement_adjustment(transaction),
+                    settlement_adjustment=settlement_adjustment,
                 )
                 items.append(
                     SalesReportItem(
@@ -115,6 +148,9 @@ class SalesReportService:
                         amount_paid=balance.amount_paid,
                         balance_due=balance.balance_due,
                         credit_balance=balance.credit_balance,
+                        return_credits=return_credits,
+                        goods_settlement=goods_settlement,
+                        service_settlement=service_settlement,
                     )
                 )
             return SalesReportResponse(
@@ -128,12 +164,23 @@ class SalesReportService:
                     sales_total=summary[1],
                     amount_received=summary[2],
                     balance_due=summary[3],
+                    return_credits=summary[4],
+                    goods_settlements=summary[5],
+                    service_settlements=summary[6],
+                    customer_credit=summary[7],
+                    unallocated_amount=summary[8],
                     monthly=[
                         SalesReportMonth(
                             month=row[0],
                             transaction_count=row[1],
                             sales_total=row[2],
                             amount_received=row[3],
+                            balance_due=row[4],
+                            return_credits=row[5],
+                            goods_settlements=row[6],
+                            service_settlements=row[7],
+                            customer_credit=row[8],
+                            unallocated_amount=row[9],
                         )
                         for row in monthly
                     ],
@@ -146,6 +193,136 @@ class SalesReportService:
                     )
                     for row in daily
                 ],
+            )
+
+    async def get_pending_deliveries(
+        self,
+        farm_id: UUID,
+        *,
+        limit: int,
+    ) -> list[PendingSaleDelivery]:
+        async with self.unit_of_work:
+            transactions = (
+                await self.transaction_repository.list_pending_sale_deliveries(
+                    farm_id,
+                    limit=limit,
+                )
+            )
+            pending_sales = []
+            for transaction in transactions:
+                delivered_by_item: dict[UUID, Decimal] = {}
+                for delivery in transaction.sale_deliveries:
+                    for delivery_item in delivery.items:
+                        delivered_by_item[delivery_item.transaction_item_id] = (
+                            delivered_by_item.get(
+                                delivery_item.transaction_item_id,
+                                Decimal("0"),
+                            )
+                            + delivery_item.quantity
+                        )
+
+                cancelled_by_item: dict[UUID, Decimal] = {}
+                for sale_return in transaction.sale_returns:
+                    if sale_return.return_type != "undelivered_cancelled":
+                        continue
+                    for return_item in sale_return.items:
+                        cancelled_by_item[return_item.transaction_item_id] = (
+                            cancelled_by_item.get(
+                                return_item.transaction_item_id,
+                                Decimal("0"),
+                            )
+                            + return_item.quantity
+                        )
+
+                pending_items = []
+                for item in transaction.items:
+                    product_type = item.product.product_type
+                    if product_type not in {ProductType.CHICKENS, ProductType.EGGS}:
+                        continue
+                    if (
+                        product_type == ProductType.EGGS
+                        and not transaction.fulfillment_required
+                    ):
+                        continue
+                    conversion_factor = Decimal(item.conversion_factor)
+                    remaining_base_quantity = (
+                        Decimal(item.quantity) * conversion_factor
+                        - delivered_by_item.get(item.id, Decimal("0"))
+                        - cancelled_by_item.get(item.id, Decimal("0"))
+                    )
+                    if remaining_base_quantity <= 0:
+                        continue
+                    pending_items.append(
+                        PendingSaleDeliveryItem(
+                            product_name=item.product.name,
+                            product_type=product_type,
+                            quantity_remaining=(
+                                remaining_base_quantity / conversion_factor
+                            ),
+                            quantity_remaining_base=remaining_base_quantity,
+                            unit_name=item.unit.name if item.unit is not None else None,
+                        )
+                    )
+
+                if pending_items:
+                    pending_sales.append(
+                        PendingSaleDelivery(
+                            id=transaction.id,
+                            reference_number=transaction.reference_number,
+                            transaction_date=transaction.transaction_date,
+                            customer_name=(
+                                transaction.contact.name
+                                if transaction.contact is not None
+                                else None
+                            ),
+                            items=pending_items,
+                        )
+                    )
+            return pending_sales
+
+    async def get_outstanding_balances(
+        self,
+        farm_id: UUID,
+        *,
+        limit: int,
+    ) -> OutstandingBalanceSummary:
+        async with self.unit_of_work:
+            rows = await self.transaction_repository.get_outstanding_balance_summary(
+                farm_id,
+                limit=limit,
+            )
+            items = [
+                OutstandingTransactionBalance(
+                    id=row.id,
+                    transaction_type=row.transaction_type,
+                    reference_number=row.reference_number,
+                    transaction_date=row.transaction_date,
+                    contact_name=row.contact_name,
+                    balance_due=row.balance_due,
+                    credit_balance=row.credit_balance,
+                    account_balance_due=row.account_balance_due,
+                    account_credit_balance=row.account_credit_balance,
+                )
+                for row in rows
+            ]
+            return OutstandingBalanceSummary(
+                items=items,
+                customer_balance_due_total=(
+                    rows[0].customer_balance_due_total
+                    if rows
+                    else Decimal("0.00")
+                ),
+                supplier_balance_due_total=(
+                    rows[0].supplier_balance_due_total
+                    if rows
+                    else Decimal("0.00")
+                ),
+                customer_credit_total=(
+                    rows[0].customer_credit_total if rows else Decimal("0.00")
+                ),
+                supplier_credit_total=(
+                    rows[0].supplier_credit_total if rows else Decimal("0.00")
+                ),
             )
 
     @staticmethod

@@ -55,15 +55,16 @@ class NotificationOutboxRepository:
         now: datetime,
         max_attempts: int,
         error_summary: str,
-    ) -> None:
+    ) -> bool:
         event = await self.session.get(NotificationOutbox, event_id, with_for_update=True)
         if event is None or event.processed_at is not None:
-            return
+            return False
         event.attempts += 1
         event.last_error = error_summary[:500]
         if event.attempts >= max_attempts:
             event.failed_at = now
-            return
+            return True
         delay_seconds = min(2 ** min(event.attempts, 12), 3600)
         event.available_at = now + timedelta(seconds=delay_seconds)
         await self.session.flush()
+        return False

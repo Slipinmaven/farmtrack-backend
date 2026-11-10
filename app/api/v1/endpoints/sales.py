@@ -4,13 +4,39 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, Query
 
 from app.dependencies.farm import get_owned_farm
-from app.dependencies.services import get_sales_report_service
+from app.presentation.dependencies.services import get_sales_report_service
 from app.models.farm import Farm
 from app.schemas.enums import ProductType
-from app.schemas.sales_report import SalesReportFilters, SalesReportResponse
+from app.schemas.sales_report import (
+    OutstandingBalanceSummary,
+    PendingSaleDelivery,
+    SalesReportFilters,
+    SalesReportResponse,
+)
 from app.services.sales_report_service import SalesReportService
 
 router = APIRouter(prefix="/farms/{farm_id}/sales", tags=["Sales"])
+
+
+@router.get("/pending-deliveries", response_model=list[PendingSaleDelivery])
+async def get_pending_sale_deliveries(
+    farm: Annotated[Farm, Depends(get_owned_farm)],
+    service: Annotated[SalesReportService, Depends(get_sales_report_service)],
+    limit: int = Query(default=5, ge=1, le=20),
+) -> list[PendingSaleDelivery]:
+    return await service.get_pending_deliveries(farm.id, limit=limit)
+
+
+@router.get(
+    "/outstanding-balances",
+    response_model=OutstandingBalanceSummary,
+)
+async def get_outstanding_balances(
+    farm: Annotated[Farm, Depends(get_owned_farm)],
+    service: Annotated[SalesReportService, Depends(get_sales_report_service)],
+    limit: int = Query(default=20, ge=1, le=100),
+) -> OutstandingBalanceSummary:
+    return await service.get_outstanding_balances(farm.id, limit=limit)
 
 
 @router.get("", response_model=SalesReportResponse)

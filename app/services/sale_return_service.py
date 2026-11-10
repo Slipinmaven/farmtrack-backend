@@ -8,6 +8,7 @@ from app.core.unit_of_work import UnitOfWork
 from app.repositories.batch_block_repository import BatchBlockRepository
 from app.repositories.block_repository import BlockRepository
 from app.repositories.chicken_batch_repository import ChickenBatchRepository
+from app.repositories.contact_repository import ContactRepository
 from app.repositories.product_repository import ProductRepository
 from app.repositories.sale_delivery_repository import SaleDeliveryRepository
 from app.repositories.sale_return_repository import SaleReturnRepository
@@ -22,6 +23,7 @@ from app.schemas.enums import (
     InventoryMovementType,
     ProductType,
     SaleReturnType,
+    ContactRoleEnum,
     NotificationEventType,
     TransactionStatus,
     TransactionType,
@@ -56,6 +58,7 @@ class SaleReturnService:
         sale_return_repository: SaleReturnRepository,
         transaction_payment_repository: TransactionPaymentRepository,
         transaction_refund_repository: TransactionRefundRepository,
+        contact_repository: ContactRepository,
         chicken_batch_repository: ChickenBatchRepository,
         block_repository: BlockRepository,
         batch_block_repository: BatchBlockRepository,
@@ -70,6 +73,7 @@ class SaleReturnService:
         self.sale_return_repository = sale_return_repository
         self.transaction_payment_repository = transaction_payment_repository
         self.transaction_refund_repository = transaction_refund_repository
+        self.contact_repository = contact_repository
         self.chicken_batch_repository = chicken_batch_repository
         self.block_repository = block_repository
         self.batch_block_repository = batch_block_repository
@@ -247,6 +251,10 @@ class SaleReturnService:
                             raise ConflictError(
                                 "Returned chickens must be assigned to an active batch."
                             )
+                        if batch.product_id != transaction_item.product_id:
+                            raise ConflictError(
+                                f"Batch '{batch.name}' is not linked to the selected chicken product."
+                            )
                         if (
                             transaction_item.chicken_type is not None
                             and batch.chicken_type != transaction_item.chicken_type
@@ -308,6 +316,23 @@ class SaleReturnService:
                 if quantity > delivered_quantity - previously_returned:
                     raise ConflictError(
                         "Return batch allocation exceeds the quantity previously delivered from that batch."
+                    )
+
+            if requested_credit_total > Decimal("0.00"):
+                customer = (
+                    await self.contact_repository.get_by_id(
+                        farm_id,
+                        transaction.contact_id,
+                    )
+                    if transaction.contact_id is not None
+                    else None
+                )
+                if customer is None or not customer.name.strip() or not any(
+                    role.role == ContactRoleEnum.CUSTOMER
+                    for role in customer.contact_roles
+                ):
+                    raise ConflictError(
+                        "A customer with a name is required to record sale-return credit."
                     )
 
             for block_id, quantity in block_increments.items():
@@ -463,7 +488,10 @@ class SaleReturnService:
                 await self.notification_outbox_repository.enqueue(
                     farm_id=farm_id,
                     event_type=NotificationEventType.CHICKEN_RETURN_RECORDED.value,
-                    payload={"return_id": str(sale_return.id)},
+                    payload={
+                        "return_id": str(sale_return.id),
+                        "transaction_id": str(transaction_id),
+                    },
                     dedupe_key=f"chicken-return.recorded:{sale_return.id}",
                 )
 

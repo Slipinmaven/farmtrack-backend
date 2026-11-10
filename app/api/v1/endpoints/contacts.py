@@ -1,10 +1,12 @@
+from datetime import date
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
 from app.dependencies.farm import get_owned_farm
-from app.dependencies.services import (
+from app.presentation.dependencies.services import (
+    get_account_ledger_service,
     get_contact_history_service,
     get_contact_service,
 )
@@ -20,9 +22,11 @@ from app.schemas.contact import (
     ContactUpdateRequest,
     ContactTransactionHistoryResponse,
 )
+from app.schemas.account_ledger import AccountLedgerResponse
 from app.schemas.enums import ContactRoleEnum
 from app.services.contact_service import ContactService
 from app.services.contact_history_service import ContactHistoryService
+from app.services.account_ledger_service import AccountLedgerService
 
 
 router = APIRouter(
@@ -46,6 +50,27 @@ async def list_contacts(
         role=role,
         limit=limit,
         offset=offset,
+    )
+
+
+@router.get("/ledger", response_model=AccountLedgerResponse)
+async def get_account_ledger(
+    farm: Farm = Depends(get_owned_farm),
+    service: AccountLedgerService = Depends(get_account_ledger_service),
+    contact_id: UUID | None = None,
+    from_date: date | None = None,
+    to_date: date | None = None,
+) -> AccountLedgerResponse:
+    if from_date and to_date and from_date > to_date:
+        raise HTTPException(
+            status_code=422,
+            detail="Start date must be on or before end date.",
+        )
+    return await service.get_ledger(
+        farm.id,
+        contact_id=contact_id,
+        from_date=from_date,
+        to_date=to_date,
     )
 
 

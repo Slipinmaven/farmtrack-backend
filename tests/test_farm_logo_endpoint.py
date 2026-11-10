@@ -9,7 +9,7 @@ from starlette import status
 from app.api.v1.endpoints import farm as farm_endpoint
 from app.core.exception_handlers import register_exception_handlers
 from app.dependencies.farm import get_farm_manager
-from app.dependencies.services import get_farm_service
+from app.presentation.dependencies.services import get_farm_service
 from app.schemas.farm import FarmSettingsResponse
 from app.services.farm_logo_storage import FarmLogoStorage
 

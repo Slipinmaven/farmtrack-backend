@@ -2,8 +2,25 @@ from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.exc import IntegrityError
 
+from app.core.exceptions import ConflictError
 from app.models.transaction_payments import TransactionPayment
+
+
+_MPESA_REFERENCE_INDEX = "uq_transaction_payments_mpesa_reference"
+
+
+def _is_duplicate_mpesa_reference(error: IntegrityError) -> bool:
+    original_error = error.orig
+    while original_error is not None:
+        diagnostic = getattr(original_error, "diag", None)
+        if getattr(diagnostic, "constraint_name", None) == _MPESA_REFERENCE_INDEX:
+            return True
+        if _MPESA_REFERENCE_INDEX in str(original_error):
+            return True
+        original_error = original_error.__cause__ or original_error.__context__
+    return False
 
 
 class TransactionPaymentRepository:
@@ -31,7 +48,14 @@ class TransactionPaymentRepository:
     async def create(self, payment_data: dict) -> TransactionPayment:
         payment = TransactionPayment(**payment_data)
         self.session.add(payment)
-        await self.session.flush()
+        try:
+            await self.session.flush()
+        except IntegrityError as error:
+            if _is_duplicate_mpesa_reference(error):
+                raise ConflictError(
+                    "This M-Pesa transaction reference has already been recorded."
+                ) from error
+            raise
         return payment
 
     async def update(self, payment: TransactionPayment) -> TransactionPayment:

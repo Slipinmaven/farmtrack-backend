@@ -11,6 +11,7 @@ FarmTrack API is the FastAPI backend for the FarmTrack poultry farm management a
 - Egg collections, losses and sales.
 - Inventory purchases, movements, consumption and expenses.
 - Reminders, notifications and farm activity history.
+- Searchable, paginated sale and purchase receipt history, including each recorded payment.
 - Sales reports and accrual profitability reporting with stock-cost tracking.
 
 ## Requirements
@@ -101,8 +102,112 @@ Settings are loaded from environment variables or a local `.env` file. Names are
 | `JWT_AUDIENCE` | No | Token audience; defaults to `farmtrack-mobile`. |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | No | Access token lifetime; defaults to `15`. |
 | `REFRESH_TOKEN_EXPIRE_DAYS` | No | Refresh token lifetime; defaults to `30`. |
+| `SMTP_HOST` | No | SMTP server hostname; defaults to Gmail's `smtp.gmail.com`. |
+| `SMTP_PORT` | No | SMTP port; defaults to `587` (STARTTLS). |
+| `SMTP_USERNAME` | No | Gmail account address used to authenticate. |
+| `SMTP_PASSWORD` | No | Google app password for that account. Keep it in the server environment and never expose it to the mobile app. |
+| `SMTP_FROM_EMAIL` | No | Sender address; defaults to `SMTP_USERNAME`. For Gmail, use the same address unless you have configured a Gmail send-as alias. |
+| `FARMTRACK_APP_URL` | No | App link included in farm invitation emails; defaults to `farmtrack://farm-team`. |
+| `APP_RELEASE_ADMIN_EMAILS` | No | Comma-separated FarmTrack accounts authorized to register Android releases and email download invitations. |
+| `GITHUB_RELEASE_REPOSITORY` | For APK distribution | Private GitHub repository in `owner/repository` format. |
+| `GITHUB_RELEASE_TOKEN` | For APK distribution | Server-only fine-grained token with Contents read-only access to the release repository. Never put it in the mobile app or expose it in logs/responses. |
+| `APP_PUBLIC_BASE_URL` | No | Public HTTPS origin of this backend, used to create download links. |
+| `DOWNLOAD_TOKEN_EXPIRY_DAYS` | No | Download invitation lifetime; defaults to 7 days. |
 
 The full settings model and validation rules are in `app/core/config.py`.
+
+Farm invitation emails are added to the transactional outbox and sent by the
+background worker, with retries. Configure both `SMTP_USERNAME` and
+`SMTP_PASSWORD` to enable delivery. If they are absent,
+invitations still work in-app and the membership response reports
+`invitation_email_status: "not_configured"`. Delivery status is visible in the
+farm team list; failed deliveries can be retried from the app. Never send or
+log the initial password set by an owner; users must receive it through a
+separate secure channel.
+
+For Gmail SMTP, enable 2-Step Verification on the Google account, create an
+app password for FarmTrack, and place the 16-character app password in the
+backend `.env` as `SMTP_PASSWORD` (without the display spaces). Do not use the
+account's regular Google password. Set `SMTP_USERNAME` to the Gmail account
+address. Optionally set `SMTP_FROM_EMAIL`; otherwise the account address is
+used as the sender. Keep these values only on the backend server.
+
+To send a real test email through Gmail SMTP (without using the database or
+creating a farm invitation), run this from the backend directory after setting
+the SMTP values in `.env`:
+
+```powershell
+python scripts/send_test_email.py you@example.com
+```
+
+Replace the address with an inbox you control. The command sends an actual
+email.
+
+### Android app download distribution
+
+APK distribution uses a private GitHub repository for release assets. Configure
+`GITHUB_RELEASE_REPOSITORY` as `owner/repository` and set
+`GITHUB_RELEASE_TOKEN` to a fine-grained personal access token limited to that
+repository with **Contents: read-only** permission. Keep the token only in the
+backend host's environment; it must never be included in the mobile app. Set
+`APP_PUBLIC_BASE_URL` to the public HTTPS backend origin and
+`APP_RELEASE_ADMIN_EMAILS` to a comma-separated allowlist of administrator
+account emails.
+
+To publish a mobile build, increment `expo.version` in `app.json` in the
+separate mobile repository, then run this command from that repository:
+
+```sh
+eas build --profile production --platform android
+```
+
+The production EAS profile creates an APK and automatically increments the
+Android version code using EAS's remote version source. Download the build
+artifact and attach it to a published GitHub Release in the configured private
+repository. Use GitHub CLI, while authenticated to that repository, to find the
+uploaded asset ID:
+
+```sh
+gh api repos/OWNER/REPOSITORY/releases/tags/v1.2.3 --jq '.assets[] | {id, name, size}'
+```
+
+An allowlisted administrator then registers it with `POST /api/v1/app-releases`:
+
+```json
+{
+  "version": "1.2.3",
+  "version_code": 123,
+  "platform": "android",
+  "github_asset_id": 123456,
+  "release_notes": "Bug fixes and improvements.",
+  "is_latest": true
+}
+```
+
+The backend verifies the asset in the configured repository and takes the APK
+filename and size from GitHub's metadata. An administrator can list releases with
+`GET /api/v1/app-releases`, and send an invitation with
+`POST /api/v1/app-releases/{release_id}/invitations`. Release management
+requires an authenticated FarmTrack account. The email link itself does not
+require an account: `GET /api/v1/downloads/{token}` validates a time-limited
+invitation credential and obtains a temporary GitHub asset URL using the
+server-only token. GitHub serves the APK directly where possible; otherwise
+the backend streams it without buffering the whole file.
+An administrator can revoke a previously issued link with
+`DELETE /api/v1/app-releases/invitations/{invitation_id}`.
+Download tokens are stored hashed and expire after the configured number of
+days. Apply the Alembic migrations before using these endpoints. Existing
+Supabase-backed release records are preserved but deactivated by the migration;
+register their GitHub assets as new releases.
+
+Send an invitation with `{"recipient_email":"person@example.com"}`. The
+backend responds only after SMTP accepts the email and does not return the raw
+download token. If sending fails, the token is marked failed and revoked.
+
+For a Render free-tier service, the first link request may wait for the API to
+wake from sleep. When GitHub returns a temporary asset URL, GitHub serves the
+APK directly; if GitHub streams the asset response instead, the backend proxies
+the APK as a stream.
 
 ### Connection budget for multiple API instances
 
@@ -153,12 +258,15 @@ The test dependencies are kept separate from runtime dependencies in `requiremen
 The schema document describes the models registered in the source tree; it is not a live database dump.
 
 Farm access is managed through `farm_memberships`. Owners can invite managers or
-workers; managers can invite and manage workers; workers can use farm
-operations but cannot edit farm settings, manage members, or delete the farm.
-Invitations are currently for existing active FarmTrack accounts and are
-accepted in-app through `GET /api/v1/farms/invitations` and
-`POST /api/v1/farms/invitations/{membership_id}/accept`. An email delivery
-integration is not included yet.
+workers and create accounts for new users; managers can invite and manage
+workers; workers can use farm operations but cannot edit farm settings, manage
+members, or delete the farm. New accounts require an owner-provided initial
+password of at least 8 characters. The password is not emailed; the owner must
+share it with the user through a secure channel. Users accept their farm
+invitations in-app through `GET /api/v1/farms/invitations` and
+`POST /api/v1/farms/invitations/{membership_id}/accept`. Farm invitation email
+delivery uses Gmail SMTP when configured; account passwords are never included
+in email. A forced initial-password change is not included yet.
 
 ## Companion client
 

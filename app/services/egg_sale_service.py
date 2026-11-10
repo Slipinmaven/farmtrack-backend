@@ -7,11 +7,14 @@ from app.core.unit_of_work import UnitOfWork
 from app.models.farm import Farm
 from app.repositories.egg_collection_repository import EggCollectionRepository
 from app.repositories.egg_loss_repository import EggLossRepository
+from app.repositories.inventory_movement_repository import (
+    InventoryMovementRepository,
+)
 from app.repositories.product_repository import ProductRepository
 from app.repositories.product_unit_repository import ProductUnitRepository
 from app.repositories.transaction_item_repository import TransactionItemRepository
 from app.schemas.egg_sale import EggSaleCreateRequest
-from app.schemas.enums import ProductType, TransactionType
+from app.schemas.enums import InventoryMovementType, ProductType, TransactionType
 from app.schemas.transaction import (
     TransactionCreate,
     TransactionItemCreate,
@@ -28,6 +31,7 @@ class EggSaleService:
         product_unit_repository: ProductUnitRepository,
         collection_repository: EggCollectionRepository,
         loss_repository: EggLossRepository,
+        inventory_movement_repository: InventoryMovementRepository,
         transaction_item_repository: TransactionItemRepository,
         transaction_service: TransactionService,
         unit_of_work: UnitOfWork,
@@ -36,6 +40,7 @@ class EggSaleService:
         self.product_unit_repository = product_unit_repository
         self.collection_repository = collection_repository
         self.loss_repository = loss_repository
+        self.inventory_movement_repository = inventory_movement_repository
         self.transaction_item_repository = transaction_item_repository
         self.transaction_service = transaction_service
         self.unit_of_work = unit_of_work
@@ -104,11 +109,31 @@ class EggSaleService:
                     farm.id
                 )
             )
+            settlement_received_totals = (
+                await self.inventory_movement_repository.get_totals_by_type(
+                    farm.id,
+                    InventoryMovementType.SETTLEMENT_RECEIVED,
+                )
+            )
+            settlement_issued_totals = (
+                await self.inventory_movement_repository.get_totals_by_type(
+                    farm.id,
+                    InventoryMovementType.SETTLEMENT_ISSUED,
+                )
+            )
             for product_id, requested_quantity in requested_base_quantities.items():
                 available_quantity = max(
                     collection_totals.get(product_id, Decimal("0.000"))
                     - loss_totals.get(product_id, Decimal("0.000"))
-                    - sold_totals.get(product_id, Decimal("0.000")),
+                    - sold_totals.get(product_id, Decimal("0.000"))
+                    + settlement_received_totals.get(
+                        product_id,
+                        Decimal("0.000"),
+                    )
+                    + settlement_issued_totals.get(
+                        product_id,
+                        Decimal("0.000"),
+                    ),
                     Decimal("0.000"),
                 )
                 if requested_quantity > available_quantity:

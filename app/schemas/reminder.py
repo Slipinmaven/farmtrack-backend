@@ -18,6 +18,10 @@ class ReminderCreateRequest(BaseModel):
     related_entity_id: UUID | None = None
 
 
+class ReminderRescheduleRequest(BaseModel):
+    due_at: datetime
+
+
 class ReminderResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

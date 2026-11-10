@@ -1,6 +1,7 @@
 import json
 import logging
 import logging.handlers
+import re
 from contextvars import ContextVar
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -8,6 +9,11 @@ from pathlib import Path
 from app.core.config import settings
 
 request_id_context: ContextVar[str] = ContextVar("request_id", default="-")
+_DOWNLOAD_TOKEN_PATH = re.compile(r"(/api/v1/downloads/)[^/?#]+")
+
+
+def redact_sensitive_path(path: str) -> str:
+    return _DOWNLOAD_TOKEN_PATH.sub(r"\1[REDACTED]", path)
 
 
 class StructuredFormatter(logging.Formatter):

@@ -6,15 +6,18 @@ from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.logging import get_application_logger
 from app.models.farm import Farm
+from app.models.farm_membership import FarmMembership
 from app.models.notifications import Notification
 from app.models.notification_outbox import NotificationOutbox
 from app.repositories.notification_outbox_repository import NotificationOutboxRepository
 from app.repositories.notification_repository import NotificationRepository
 from app.schemas.enums import NotificationCategory, NotificationPriority
 from app.services.expo_push import send_expo_push_notification
+from app.services.smtp_email_service import SMTPEmailService
 
 logger = get_application_logger()
 
@@ -24,14 +27,17 @@ class NotificationDispatcher:
         self.session = session
         self.outbox_repository = NotificationOutboxRepository(session)
         self.notification_repository = NotificationRepository(session)
+        self.smtp_email_service = SMTPEmailService()
 
     async def dispatch_once(self, *, max_attempts: int = 5) -> bool:
         event = await self.outbox_repository.claim_one()
         if event is None:
             return False
+        event_id = event.id
+        event_type = event.event_type
+        payload = event.payload or {}
         try:
-            if event.event_type == "reminder.push":
-                payload = event.payload or {}
+            if event_type == "reminder.push":
                 await asyncio.to_thread(
                     send_expo_push_notification,
                     str(payload["expo_push_token"]),
@@ -39,6 +45,8 @@ class NotificationDispatcher:
                     str(payload.get("description") or payload.get("title") or "Reminder due"),
                     {"reminder_id": str(payload["reminder_id"])},
                 )
+            elif event_type == "farm.invitation.email":
+                await self._send_farm_invitation_email(event_id, payload)
             else:
                 notification = await self._build_notification(event)
                 await self.notification_repository.create_for_source_event(notification)
@@ -53,18 +61,27 @@ class NotificationDispatcher:
                 "notification_dispatch_failed",
                 extra={
                     "event": "notification_dispatch_failed",
-                    "outbox_id": str(event.id),
-                    "event_type": event.event_type,
+                    "outbox_id": str(event_id),
+                    "event_type": event_type,
                     "error": error_summary,
                 },
             )
             try:
-                await self.outbox_repository.record_failure(
-                    event.id,
+                terminal_failure = await self.outbox_repository.record_failure(
+                    event_id,
                     now=datetime.now(timezone.utc),
                     max_attempts=max_attempts,
                     error_summary=error_summary,
                 )
+                if terminal_failure and event_type == "farm.invitation.email":
+                    membership_id = UUID(str(payload["membership_id"]))
+                    membership = await self.session.get(
+                        FarmMembership,
+                        membership_id,
+                        with_for_update=True,
+                    )
+                    if membership is not None:
+                        membership.invitation_email_status = "failed"
                 await self.session.commit()
             except Exception:
                 await self.session.rollback()
@@ -72,11 +89,40 @@ class NotificationDispatcher:
                     "notification_failure_recording_failed",
                     extra={
                         "event": "notification_failure_recording_failed",
-                        "outbox_id": str(event.id),
-                        "event_type": event.event_type,
+                        "outbox_id": str(event_id),
+                        "event_type": event_type,
                     },
                 )
             return False
+
+    async def _send_farm_invitation_email(
+        self,
+        outbox_id: UUID,
+        payload: dict,
+    ) -> None:
+        membership_id = UUID(str(payload["membership_id"]))
+        result = await self.session.execute(
+            select(FarmMembership)
+            .options(
+                selectinload(FarmMembership.user),
+                selectinload(FarmMembership.farm),
+            )
+            .where(FarmMembership.id == membership_id)
+            .with_for_update()
+        )
+        membership = result.scalar_one_or_none()
+        if membership is None:
+            return
+        if membership.status != "invited":
+            membership.invitation_email_status = "cancelled"
+            return
+
+        await self.smtp_email_service.send_farm_invitation(
+            membership=membership,
+            idempotency_key=outbox_id,
+        )
+        membership.invitation_email_status = "sent"
+        membership.invitation_email_sent_at = datetime.now(timezone.utc)
 
     async def _build_notification(self, event: NotificationOutbox) -> dict:
         event_type = event.event_type

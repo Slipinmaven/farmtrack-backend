@@ -10,6 +10,7 @@ from app.schemas.enums import (
     ActivityType,
     ChickenBatchStatus,
     ChickenType,
+    ContactRoleEnum,
     PaymentMethod,
     ProductType,
     SaleReturnType,
@@ -42,6 +43,16 @@ class FakeTransactionRepository:
 
     async def get_by_id(self, farm_id, transaction_id):
         return self.transaction if self.transaction.id == transaction_id else None
+
+
+class FakeContactRepository:
+    def __init__(self, contact):
+        self.contact = contact
+
+    async def get_by_id(self, farm_id, contact_id):
+        if self.contact is None or self.contact.id != contact_id:
+            return None
+        return self.contact
 
 
 class FakeProductRepository:
@@ -262,6 +273,7 @@ class SaleReturnRefundServiceTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.farm_id = uuid4()
         self.transaction_id = uuid4()
+        self.customer_id = uuid4()
         self.transaction_item_id = uuid4()
         self.product_id = uuid4()
         self.batch_id = uuid4()
@@ -271,7 +283,7 @@ class SaleReturnRefundServiceTests(unittest.IsolatedAsyncioTestCase):
             transaction_type=TransactionType.SALE,
             status=TransactionStatus.COMPLETED,
             reference_number=None,
-            contact_id=None,
+            contact_id=self.customer_id,
             items=[
                 SimpleNamespace(
                     id=self.transaction_item_id,
@@ -291,6 +303,7 @@ class SaleReturnRefundServiceTests(unittest.IsolatedAsyncioTestCase):
         batch = SimpleNamespace(
             id=self.batch_id,
             farm_id=self.farm_id,
+            product_id=self.product_id,
             status=ChickenBatchStatus.ACTIVE,
             chicken_type=ChickenType.LAYERS,
             name="Layers",
@@ -325,6 +338,13 @@ class SaleReturnRefundServiceTests(unittest.IsolatedAsyncioTestCase):
         self.activity_service = FakeActivityService()
         self.inventory_service = FakeInventoryService()
         self.unit_of_work = FakeUnitOfWork()
+        self.contact_repository = FakeContactRepository(
+            SimpleNamespace(
+                id=self.customer_id,
+                name="Sale customer",
+                contact_roles=[SimpleNamespace(role=ContactRoleEnum.CUSTOMER)],
+            )
+        )
         self.return_service = SaleReturnService(
             transaction_repository=self.transaction_repository,
             product_repository=FakeProductRepository(product),
@@ -332,6 +352,7 @@ class SaleReturnRefundServiceTests(unittest.IsolatedAsyncioTestCase):
             sale_return_repository=self.return_repository,
             transaction_payment_repository=self.payment_repository,
             transaction_refund_repository=self.refund_repository,
+            contact_repository=self.contact_repository,
             chicken_batch_repository=FakeBatchRepository(batch),
             block_repository=FakeBlockRepository(block),
             batch_block_repository=self.batch_block_repository,
@@ -392,6 +413,18 @@ class SaleReturnRefundServiceTests(unittest.IsolatedAsyncioTestCase):
             ActivityType.SALE_RETURN_CREATED,
         )
 
+    async def test_sale_return_credit_requires_linked_named_customer(self):
+        self.transaction.contact_id = None
+
+        with self.assertRaisesRegex(ConflictError, "customer with a name"):
+            await self.return_service.create_return(
+                self.farm_id,
+                self.transaction_id,
+                self._return_request(SaleReturnType.UNDELIVERED_CANCELLED, 6),
+            )
+
+        self.assertEqual(self.return_repository.returns, [])
+
     async def test_cannot_cancel_more_than_undelivered_quantity(self):
         with self.assertRaises(ConflictError):
             await self.return_service.create_return(
@@ -449,6 +482,31 @@ class SaleReturnRefundServiceTests(unittest.IsolatedAsyncioTestCase):
             self.inventory_service.movements[0]["quantity_delta"],
             Decimal("3"),
         )
+
+    async def test_delivered_return_rejects_batch_linked_to_another_product(self):
+        self.return_service.chicken_batch_repository.batch.product_id = uuid4()
+        request = self._return_request(
+            SaleReturnType.DELIVERED_RETURN,
+            1,
+            [
+                {
+                    "batch_id": str(self.batch_id),
+                    "block_id": str(self.block_id),
+                    "quantity": 1,
+                }
+            ],
+        )
+
+        with self.assertRaisesRegex(ConflictError, "not linked to the selected"):
+            await self.return_service.create_return(
+                self.farm_id,
+                self.transaction_id,
+                request,
+            )
+
+        self.assertEqual(self.batch_block.quantity, 6)
+        self.assertEqual(self.return_repository.returns, [])
+        self.assertEqual(self.inventory_service.movements, [])
 
     async def test_delivered_non_chicken_return_updates_shared_inventory(self):
         self.return_service.product_repository.product.product_type = ProductType.FEED

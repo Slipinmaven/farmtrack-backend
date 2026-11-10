@@ -12,7 +12,12 @@ from app.api.v1.router import router as v1_router
 from app.core.config import settings
 from app.core.database import async_session_factory, dispose_database_engine
 from app.core.exception_handlers import register_exception_handlers
-from app.core.logging import configure_logging, get_logger, request_id_context
+from app.core.logging import (
+    configure_logging,
+    get_logger,
+    redact_sensitive_path,
+    request_id_context,
+)
 from app.services.notification_dispatcher import process_pending_notifications
 from app.services.reminder_service import enqueue_due_reminder_notifications
 
@@ -59,6 +64,10 @@ async def lifespan(_: FastAPI):
             "database_max_overflow": settings.database_max_overflow,
             "database_connections_per_process": (
                 settings.database_pool_size + settings.database_max_overflow
+            ),
+            "smtp_email_configured": (
+                settings.smtp_username is not None
+                and settings.smtp_password is not None
             ),
         },
     )
@@ -110,7 +119,7 @@ async def request_logging_middleware(request: Request, call_next):
             extra={
                 "event": "unhandled_request_exception",
                 "method": request.method,
-                "path": request.url.path,
+                "path": redact_sensitive_path(request.url.path),
                 "request_id": request_id,
             },
         )
@@ -122,7 +131,7 @@ async def request_logging_middleware(request: Request, call_next):
             extra={
                 "event": "request_completed",
                 "method": request.method,
-                "path": request.url.path,
+                "path": redact_sensitive_path(request.url.path),
                 "status": status_code,
                 "duration_ms": round(duration_ms, 2),
                 "request_id": request_id,

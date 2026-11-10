@@ -8,6 +8,9 @@ from app.core.unit_of_work import UnitOfWork
 from app.models.farm import Farm
 from app.repositories.egg_collection_repository import EggCollectionRepository
 from app.repositories.egg_loss_repository import EggLossRepository
+from app.repositories.inventory_movement_repository import (
+    InventoryMovementRepository,
+)
 from app.repositories.product_repository import ProductRepository
 from app.repositories.product_unit_repository import ProductUnitRepository
 from app.repositories.transaction_item_repository import TransactionItemRepository
@@ -38,6 +41,7 @@ class EggLossService:
         product_repository: ProductRepository,
         product_unit_repository: ProductUnitRepository,
         transaction_item_repository: TransactionItemRepository,
+        inventory_movement_repository: InventoryMovementRepository,
         unit_of_work: UnitOfWork,
         activity_service: ActivityService,
         inventory_service: InventoryService | None = None,
@@ -47,6 +51,7 @@ class EggLossService:
         self.product_repository = product_repository
         self.product_unit_repository = product_unit_repository
         self.transaction_item_repository = transaction_item_repository
+        self.inventory_movement_repository = inventory_movement_repository
         self.unit_of_work = unit_of_work
         self.activity_service = activity_service
         self.inventory_service = inventory_service
@@ -131,8 +136,24 @@ class EggLossService:
                     product.id,
                 )
             )
+            settlement_received_totals = (
+                await self.inventory_movement_repository.get_totals_by_type(
+                    farm.id,
+                    InventoryMovementType.SETTLEMENT_RECEIVED,
+                )
+            )
+            settlement_issued_totals = (
+                await self.inventory_movement_repository.get_totals_by_type(
+                    farm.id,
+                    InventoryMovementType.SETTLEMENT_ISSUED,
+                )
+            )
             available_quantity = max(
-                collected_quantity - previously_lost - previously_sold,
+                collected_quantity
+                - previously_lost
+                - previously_sold
+                + settlement_received_totals.get(product.id, Decimal("0.000"))
+                + settlement_issued_totals.get(product.id, Decimal("0.000")),
                 Decimal("0.000"),
             )
             if loss_quantity > available_quantity:

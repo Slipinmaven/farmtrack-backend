@@ -4,7 +4,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, status
 
 from app.dependencies.farm import get_owned_farm
-from app.dependencies.services import get_transaction_settlement_service
+from app.presentation.dependencies.services import get_transaction_settlement_service
 from app.models.farm import Farm
 from app.schemas.transaction_settlement import (
     TransactionSettlementBalanceResponse,

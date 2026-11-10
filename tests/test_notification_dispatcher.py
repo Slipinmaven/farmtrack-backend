@@ -11,18 +11,26 @@ from app.services.notification_dispatcher import NotificationDispatcher
 
 
 class Result:
+    def __init__(self, value=None):
+        self.value = value
+
     def scalar_one_or_none(self):
-        return SimpleNamespace(owner_id=uuid4())
+        return self.value or SimpleNamespace(owner_id=uuid4())
 
 
 class Session:
-    def __init__(self):
+    def __init__(self, result=None):
         self.rollbacks = 0
         self.commits = 0
+        self.result = result or Result()
+        self.loaded_membership = None
 
     async def execute(self, statement):
         self.statement = statement
-        return Result()
+        return self.result
+
+    async def get(self, _model, _membership_id, with_for_update=False):
+        return self.loaded_membership
 
     async def rollback(self):
         self.rollbacks += 1
@@ -50,6 +58,24 @@ class FailingOutboxRepository:
         if self.session.rollbacks != 1:
             raise AssertionError("Failed transaction was not rolled back first.")
         self.failure_recorded = True
+
+
+class InvitationOutboxRepository:
+    def __init__(self, *, event_id, membership_id):
+        self.event_id = event_id
+        self.membership_id = membership_id
+
+    async def claim_one(self):
+        return SimpleNamespace(
+            id=self.event_id,
+            event_type="farm.invitation.email",
+            payload={"membership_id": str(self.membership_id)},
+            processed_at=None,
+            last_error=None,
+        )
+
+    async def record_failure(self, *_args, **_kwargs):
+        return True
 
 
 class NotificationDispatcherTests(unittest.TestCase):
@@ -135,5 +161,74 @@ class NotificationDispatcherTests(unittest.TestCase):
 
         self.assertFalse(processed)
         self.assertTrue(outbox.failure_recorded)
+        self.assertEqual(session.rollbacks, 1)
+        self.assertEqual(session.commits, 1)
+
+    def test_invitation_email_dispatch_marks_delivery_sent(self):
+        membership = SimpleNamespace(
+            status="invited",
+            invitation_email_status="queued",
+            invitation_email_sent_at=None,
+        )
+        session = Session(result=Result(membership))
+        dispatcher = NotificationDispatcher(session)
+        event_id = uuid4()
+        dispatcher.outbox_repository = InvitationOutboxRepository(
+            event_id=event_id,
+            membership_id=uuid4(),
+        )
+
+        async def send_invitation(**_kwargs):
+            return None
+
+        dispatcher.smtp_email_service = SimpleNamespace(
+            send_farm_invitation=send_invitation
+        )
+
+        processed = asyncio.run(dispatcher.dispatch_once())
+
+        self.assertTrue(processed)
+        self.assertEqual(membership.invitation_email_status, "sent")
+        self.assertIsNotNone(membership.invitation_email_sent_at)
+        self.assertEqual(session.commits, 1)
+
+    def test_invitation_email_retry_exhaustion_marks_delivery_failed(self):
+        membership_id = uuid4()
+        membership = SimpleNamespace(
+            status="invited",
+            invitation_email_status="queued",
+            invitation_email_sent_at=None,
+        )
+        session = Session(result=Result(membership))
+        session.loaded_membership = membership
+        dispatcher = NotificationDispatcher(session)
+        dispatcher.outbox_repository = InvitationOutboxRepository(
+            event_id=uuid4(),
+            membership_id=membership_id,
+        )
+        event_id = uuid4()
+
+        async def claim_one():
+            return SimpleNamespace(
+                id=event_id,
+                event_type="farm.invitation.email",
+                payload={"membership_id": str(membership_id)},
+                processed_at=None,
+                last_error=None,
+            )
+
+        dispatcher.outbox_repository.claim_one = claim_one
+
+        async def fail_sending(**_kwargs):
+            raise RuntimeError("Gmail SMTP unavailable")
+
+        dispatcher.smtp_email_service = SimpleNamespace(
+            send_farm_invitation=fail_sending
+        )
+
+        processed = asyncio.run(dispatcher.dispatch_once())
+
+        self.assertFalse(processed)
+        self.assertEqual(membership.invitation_email_status, "failed")
         self.assertEqual(session.rollbacks, 1)
         self.assertEqual(session.commits, 1)

@@ -58,7 +58,7 @@ erDiagram
 ### Identity and Security
 
 - `users`: `id` PK; `email` unique; `password_hash`; `is_active`; `last_login_at` nullable; timestamps.
-- `farm_memberships`: `id` PK; `farm_id` FK; `user_id` FK; `role` (`owner`, `manager`, or `worker`); `status` (`invited`, `active`, or `revoked`); nullable `invited_by_id` FK; `invited_at`; nullable `accepted_at` and `revoked_at`. Unique: (`farm_id`, `user_id`). Existing farm owners are backfilled as active `owner` memberships. Invited users must have an active FarmTrack account and accept the invitation before gaining access.
+- `farm_memberships`: `id` PK; `farm_id` FK; `user_id` FK; `role` (`owner`, `manager`, or `worker`); `status` (`invited`, `active`, or `revoked`); nullable `invited_by_id` FK; `invited_at`; nullable `accepted_at` and `revoked_at`; invitation email status (`not_configured`, `queued`, `sent`, `failed`, or `cancelled`) and nullable sent timestamp. Unique: (`farm_id`, `user_id`). Existing farm owners are backfilled as active `owner` memberships. Invited users must accept the invitation before gaining access. Invitation delivery is tracked separately from membership state.
 - `refresh_tokens`: `id` PK; `user_id` FK; nullable `session_id` FK; unique `token_hash`; `expires_at`; `revoked_at` nullable; `replaced_by_token_id` nullable self-FK; timestamps.
 - `user_sessions`: `id` PK; `user_id` FK; hashed app-install `device_key`; device/platform/user-agent and network IP details; `created_at`; `last_seen_at`; nullable revocation time/reason.
 - `blocked_devices`: `id` PK; `user_id` FK; hashed app-install `device_key`; device name; permanent flag or nullable block expiry; timestamps. This blocks a registered app installation ID, not an attested hardware identity.
@@ -74,7 +74,7 @@ also edit farm profile/settings and manage worker memberships; only owners can
 delete a farm or grant/revoke manager access. Every farm-scoped API request
 requires an active membership (or farm ownership).
 - `farm_settings`: `id` PK; unique `farm_id` FK; nullable colors, font, font scale, logo, currency, timezone; `theme_mode`; timestamps.
-- `contacts`: `id` PK; `farm_id` FK; `name`; nullable phone, email, address, notes; timestamps.
+- `contacts`: `id` PK; `farm_id` FK; `name`; nullable phone, email, address, notes; normalized phone/email identity keys; timestamps. Unique per farm: (`farm_id`, `phone_normalized`) and (`farm_id`, `email_normalized`). Phone identity ignores formatting; email identity ignores case and surrounding whitespace.
 - `contact_roles`: `id` PK; `contact_id` FK; `role`; timestamps. Unique: (`contact_id`, `role`).
 - `contact_role_products`: `id` PK; `contact_role_id` FK; `product_id` FK; `created_at`. Unique: (`contact_role_id`, `product_id`).
 
@@ -91,7 +91,7 @@ requires an active membership (or farm ownership).
 
 - `transactions`: `id` PK; `farm_id` FK; nullable `contact_id` FK; `transaction_type`; `status`; `transaction_date`; nullable `reference_number`, `notes`; timestamps.
 - `transaction_items`: `id` PK; `transaction_id` FK; `product_id` FK; `unit_id` FK; nullable `chicken_type` snapshot; `quantity`; `conversion_factor`; `unit_price`; `total_amount`; nullable `notes`; timestamps. New chicken purchase items require a subtype; legacy null snapshots are filled from the explicitly selected batch on first receipt.
-- `transaction_payments`: `id` PK; `transaction_id` FK; `amount`; `payment_date`; nullable `payment_time`; `payment_method`; nullable `reference_number`, `notes`; timestamps.
+- `transaction_payments`: `id` PK; `transaction_id` FK; `amount`; `payment_date`; nullable `payment_time`; `payment_method`; nullable `reference_number`, `notes`; timestamps. Non-empty M-Pesa references are unique case-insensitively after trimming.
 - `purchase_receipts`: `id` PK; `transaction_id` FK; `received_date`; nullable `received_time`, `notes`; timestamps. Each row is one delivery event against the original transaction.
 - `purchase_receipt_items`: `id` PK; `purchase_receipt_id` FK; `transaction_item_id` FK; `quantity`; timestamps. Each row records how much of an original transaction item arrived in that delivery.
 - `purchase_receipt_item_block_allocations`: `id` PK; `purchase_receipt_item_id` FK; `block_id` FK; positive `quantity`; `created_at`. This preserves the block split for each delivery independently of current inventory.
@@ -100,6 +100,11 @@ requires an active membership (or farm ownership).
 ### Activity
 
 - `activities`: `id` PK; `farm_id` FK; nullable `user_id` and `session_id` FKs; `type`; `entity_type`; `entity_id`; nullable JSONB `details`; `created_at`. `entity_id` is polymorphic and has no database FK. System/background activity may have no session.
+
+### App Distribution
+
+- `app_releases`: `id` PK; `version`; positive `version_code`; `platform` (`android`); nullable `github_asset_id` (unique GitHub release asset ID); APK `file_name` and nullable `file_size`; nullable release notes; active/latest flags; timestamps. A null asset ID marks a legacy release that cannot be downloaded.
+- `download_tokens`: `id` PK; unique SHA-256 `token_hash`; `release_id` FK; normalized recipient email; delivery status; expiry and optional revocation timestamps; access count and last-access timestamp; `created_at`.
 
 ## Enums
 

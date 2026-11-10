@@ -47,7 +47,7 @@ class ExpenseRepository:
         self,
         farm_id: UUID,
         *,
-        category: str | None = None,
+        category: str | list[str] | None = None,
         contact_id: UUID | None = None,
         from_date: date | None = None,
         to_date: date | None = None,
@@ -75,7 +75,10 @@ class ExpenseRepository:
         )
         query = select(Expense).where(Expense.farm_id == farm_id)
         if category is not None:
-            query = query.where(Expense.category == category)
+            if isinstance(category, list):
+                query = query.where(Expense.category.in_(category))
+            else:
+                query = query.where(Expense.category == category)
         if contact_id is not None:
             query = query.where(Expense.contact_id == contact_id)
         if block_id is not None:

@@ -176,6 +176,7 @@ class SaleDeliveryServiceTests(unittest.IsolatedAsyncioTestCase):
         batch = SimpleNamespace(
             id=self.batch_id,
             farm_id=self.farm_id,
+            product_id=self.product_id,
             name="Layer flock",
             status=ChickenBatchStatus.ACTIVE,
             chicken_type=ChickenType.LAYERS,
@@ -269,6 +270,20 @@ class SaleDeliveryServiceTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertEqual(self.batch_block.quantity, 3)
         self.assertEqual(self.delivery_repository.deliveries, [])
+
+    async def test_delivery_rejects_batch_linked_to_another_product(self):
+        self.batch_repository.batches[self.batch_id].product_id = uuid4()
+
+        with self.assertRaisesRegex(ConflictError, "not linked to the selected"):
+            await self.service.create_delivery(
+                self.farm_id,
+                self.transaction_id,
+                self._request(1),
+            )
+
+        self.assertEqual(self.batch_block.quantity, 3)
+        self.assertEqual(self.delivery_repository.deliveries, [])
+        self.assertEqual(self.service.inventory_service, None)
 
     async def test_partial_delivery_can_be_completed_after_restock(self):
         first_delivery = await self.service.create_delivery(
@@ -487,6 +502,7 @@ class SaleDeliveryServiceTests(unittest.IsolatedAsyncioTestCase):
         self.batch_repository.batches[second_batch_id] = SimpleNamespace(
             id=second_batch_id,
             farm_id=self.farm_id,
+            product_id=self.product_id,
             name="Broiler flock",
             status=ChickenBatchStatus.ACTIVE,
             chicken_type=ChickenType.LAYERS,

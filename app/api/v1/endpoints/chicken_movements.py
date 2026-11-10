@@ -5,7 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, status
 
 from app.dependencies.farm import get_owned_farm
-from app.dependencies.services import get_chicken_movement_service
+from app.presentation.dependencies.services import get_chicken_movement_service
 from app.models.farm import Farm
 from app.schemas.chicken_movement import (
     ChickenMovementBatchCreateRequest,

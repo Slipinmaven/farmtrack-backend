@@ -114,6 +114,7 @@ class PurchaseReplacementService:
             block_increments: defaultdict[UUID, int] = defaultdict(int)
             batches = {}
             blocks = {}
+            transaction_items = {item.id: item for item in transaction.items}
             for replacement_item in request.items:
                 return_item = await self.purchase_return_repository.get_return_item(
                     transaction_id,
@@ -125,6 +126,13 @@ class PurchaseReplacementService:
                 ):
                     raise ResourceNotFoundError(
                         "Purchase return item was not found on the selected return."
+                    )
+                source_transaction_item = transaction_items.get(
+                    return_item.transaction_item_id
+                )
+                if source_transaction_item is None:
+                    raise ResourceNotFoundError(
+                        "The purchase item for this replacement no longer exists."
                     )
 
                 refunded = (
@@ -158,6 +166,12 @@ class PurchaseReplacementService:
                     batches[batch.id] = batch
                 if batch.status != ChickenBatchStatus.ACTIVE:
                     raise ConflictError("Replacement chickens must enter an active batch.")
+                if batch.product_id not in (None, source_transaction_item.product_id):
+                    raise ConflictError(
+                        f"Batch '{batch.name}' is not linked to the selected chicken product."
+                    )
+                if batch.product_id is None:
+                    batch.product_id = source_transaction_item.product_id
 
                 allocation_plans = []
                 for allocation in replacement_item.block_allocations:
@@ -219,7 +233,6 @@ class PurchaseReplacementService:
             )
             response_items = []
             activity_items: list[dict[str, object]] = []
-            transaction_items = {item.id: item for item in transaction.items}
             for replacement_item, return_item, batch, allocations in plans:
                 saved_item = await self.purchase_replacement_repository.create_item(
                     {

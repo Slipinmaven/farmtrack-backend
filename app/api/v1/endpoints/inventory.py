@@ -4,7 +4,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, status
 
 from app.dependencies.farm import get_owned_farm
-from app.dependencies.services import (
+from app.presentation.dependencies.services import (
     get_inventory_purchase_service,
     get_inventory_service,
 )

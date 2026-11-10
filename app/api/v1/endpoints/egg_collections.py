@@ -5,7 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, status
 
 from app.dependencies.farm import get_owned_farm
-from app.dependencies.services import (
+from app.presentation.dependencies.services import (
     get_egg_collection_options_service,
     get_egg_collection_service,
 )

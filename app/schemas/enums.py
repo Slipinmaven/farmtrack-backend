@@ -24,6 +24,14 @@ class FarmMembershipStatus(StrEnum):
     REVOKED = "revoked"
 
 
+class FarmInvitationEmailStatus(StrEnum):
+    NOT_CONFIGURED = "not_configured"
+    QUEUED = "queued"
+    SENT = "sent"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+
+
 class ProductType(StrEnum):
     EGGS = "eggs"
     CHICKENS = "chickens"

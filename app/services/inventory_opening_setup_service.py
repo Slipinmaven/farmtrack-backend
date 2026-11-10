@@ -196,12 +196,28 @@ class InventoryOpeningSetupService:
         used_names: set[str] = set()
         block_totals: dict[UUID, int] = {}
         blocks = {}
-        chicken_products = [
-            product
-            for product in await self.product_repository.list_by_farm(farm.id)
-            if product.product_type == ProductType.CHICKENS and product.is_active
-        ]
+        chicken_products = {}
+        for product_id in sorted(
+            {batch.product_id for batch in request.chicken_batches},
+            key=str,
+        ):
+            product = await self.product_repository.get_by_id_for_update(
+                farm.id,
+                product_id,
+            )
+            if product is None:
+                raise ResourceNotFoundError("Chicken product not found for this farm.")
+            if product.product_type != ProductType.CHICKENS or not product.is_active:
+                raise ConflictError(
+                    "Each opening chicken batch must use an active chicken product."
+                )
+            chicken_products[product.id] = product
         for batch in request.chicken_batches:
+            product = chicken_products.get(batch.product_id)
+            if product is None:
+                raise ConflictError(
+                    "Each opening chicken batch must use an active chicken product."
+                )
             if batch.hatch_date is not None and batch.hatch_date > request.setup_date:
                 raise ConflictError(
                     f"Hatch date for batch '{batch.name}' cannot be after the opening stock date."
@@ -246,10 +262,12 @@ class InventoryOpeningSetupService:
                 )
 
         for batch in request.chicken_batches:
+            product = chicken_products[batch.product_id]
             chicken_batch = await self.batch_repository.create(
                 farm.id,
                 {
                     "name": batch.name,
+                    "product_id": product.id,
                     "chicken_type": batch.chicken_type,
                     "breed": batch.breed,
                     "hatch_date": batch.hatch_date,
@@ -266,22 +284,21 @@ class InventoryOpeningSetupService:
                         "quantity": allocation.quantity,
                     }
                 )
-            if chicken_products:
-                await self.inventory_service.append_movement(
-                    farm_id=farm.id,
-                    user_id=farm.owner_id,
-                    product_id=chicken_products[0].id,
-                    quantity_delta=Decimal(
-                        sum(allocation.quantity for allocation in batch.allocations)
-                    ),
-                    movement_type=InventoryMovementType.OPENING_BALANCE,
-                    occurred_on=request.setup_date,
-                    notes=f"Opening chicken stock: {batch.name}",
-                    source_type="chicken_opening_batch",
-                    source_id=chicken_batch.id,
-                    source_item_id=chicken_batch.id,
-                    unit_cost=batch.unit_cost,
-                )
+            await self.inventory_service.append_movement(
+                farm_id=farm.id,
+                user_id=farm.owner_id,
+                product_id=product.id,
+                quantity_delta=Decimal(
+                    sum(allocation.quantity for allocation in batch.allocations)
+                ),
+                movement_type=InventoryMovementType.OPENING_BALANCE,
+                occurred_on=request.setup_date,
+                notes=f"Opening chicken stock: {batch.name}",
+                source_type="chicken_opening_batch",
+                source_id=chicken_batch.id,
+                source_item_id=chicken_batch.id,
+                unit_cost=batch.unit_cost,
+            )
 
     async def _create_egg_stock(self, farm: Farm, request) -> None:
         if await self.collection_repository.list_by_farm(farm.id):

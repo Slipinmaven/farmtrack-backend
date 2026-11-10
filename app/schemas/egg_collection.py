@@ -84,9 +84,13 @@ class EggCollectionOptionsProduct(BaseModel):
     product_type: ProductType
     is_sellable: bool
     units: list[EggCollectionUnitOption]
+    opening_stock_quantity_in_base_unit: Decimal
     collected_quantity_in_base_unit: Decimal
     lost_quantity_in_base_unit: Decimal
     sold_quantity_in_base_unit: Decimal
+    stock_adjustment_quantity_in_base_unit: Decimal
+    on_hand_quantity_in_base_unit: Decimal
+    reserved_quantity_in_base_unit: Decimal
     available_quantity_in_base_unit: Decimal
 
 

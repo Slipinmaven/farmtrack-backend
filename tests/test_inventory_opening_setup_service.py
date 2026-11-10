@@ -29,6 +29,7 @@ class InventoryOpeningSetupServiceTests(unittest.IsolatedAsyncioTestCase):
         self.farm = SimpleNamespace(id=self.farm_id, owner_id=self.owner_id)
         self.block_id = uuid4()
         self.product_id = uuid4()
+        self.chicken_product_id = uuid4()
         self.unit_id = uuid4()
         self.batch_id = uuid4()
         self.farm_repository = SimpleNamespace(
@@ -109,6 +110,9 @@ class InventoryOpeningSetupServiceTests(unittest.IsolatedAsyncioTestCase):
         )
 
     def request(self, species, **values):
+        if species == "chickens":
+            for batch in values.get("chicken_batches", []):
+                batch.setdefault("product_id", str(self.chicken_product_id))
         return InventoryOpeningSetupRequest.model_validate(
             {
                 "species": species,
@@ -117,7 +121,23 @@ class InventoryOpeningSetupServiceTests(unittest.IsolatedAsyncioTestCase):
             }
         )
 
+    def add_chicken_product(self):
+        chicken_product = SimpleNamespace(
+            id=self.chicken_product_id,
+            name="Live chickens",
+            is_active=True,
+            product_type=ProductType.CHICKENS,
+        )
+        self.product_repository.list_by_farm = AsyncMock(
+            return_value=[chicken_product]
+        )
+        self.product_repository.get_by_id_for_update = AsyncMock(
+            return_value=chicken_product
+        )
+        return chicken_product
+
     async def test_chicken_opening_stock_creates_batch_and_housing_allocation(self):
+        chicken_product = self.add_chicken_product()
         request = self.request(
             "chickens",
             chicken_batches=[
@@ -135,6 +155,10 @@ class InventoryOpeningSetupServiceTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.record_count, 1)
         self.batch_repository.create.assert_awaited_once()
+        self.assertEqual(
+            self.batch_repository.create.await_args.args[1]["product_id"],
+            chicken_product.id,
+        )
         self.batch_block_repository.create.assert_awaited_once_with(
             {
                 "batch_id": self.batch_id,
@@ -145,9 +169,92 @@ class InventoryOpeningSetupServiceTests(unittest.IsolatedAsyncioTestCase):
         self.setup_repository.create.assert_awaited_once_with(
             self.farm_id, "chickens", date(2026, 10, 20)
         )
+        self.inventory_service.append_movement.assert_awaited_once()
+        movement = self.inventory_service.append_movement.await_args.kwargs
+        self.assertEqual(movement["product_id"], chicken_product.id)
+        self.assertEqual(movement["quantity_delta"], Decimal("12"))
+        self.assertEqual(
+            movement["movement_type"],
+            InventoryMovementType.OPENING_BALANCE,
+        )
+
+    async def test_chicken_opening_stock_requires_an_active_chicken_product(self):
+        request = self.request(
+            "chickens",
+            chicken_batches=[
+                {
+                    "name": "Opening layers",
+                    "chicken_type": "layers",
+                    "allocations": [
+                        {"block_id": str(self.block_id), "quantity": 12}
+                    ],
+                }
+            ],
+        )
+
+        with self.assertRaisesRegex(
+            ConflictError, "active chicken product"
+        ):
+            await self.service.create(self.farm, request)
+
+        self.batch_repository.create.assert_not_awaited()
         self.inventory_service.append_movement.assert_not_awaited()
+        self.setup_repository.create.assert_not_awaited()
+
+    async def test_chicken_opening_stock_uses_the_selected_product_per_batch(self):
+        first = self.add_chicken_product()
+        second = SimpleNamespace(
+            id=uuid4(),
+            name="Broilers",
+            is_active=True,
+            product_type=ProductType.CHICKENS,
+        )
+        self.product_repository.list_by_farm = AsyncMock(return_value=[first, second])
+        selected_products = {first.id: first, second.id: second}
+        self.product_repository.get_by_id_for_update = AsyncMock(
+            side_effect=lambda _farm_id, product_id: selected_products.get(product_id)
+        )
+        request = self.request(
+            "chickens",
+            chicken_batches=[
+                {
+                    "name": "Opening layers",
+                    "product_id": str(first.id),
+                    "chicken_type": "layers",
+                    "allocations": [
+                        {"block_id": str(self.block_id), "quantity": 12}
+                    ],
+                },
+                {
+                    "name": "Opening broilers",
+                    "product_id": str(second.id),
+                    "chicken_type": "broiler",
+                    "allocations": [
+                        {"block_id": str(self.block_id), "quantity": 5}
+                    ],
+                },
+            ],
+        )
+
+        await self.service.create(self.farm, request)
+
+        self.assertEqual(
+            [
+                call.args[1]["product_id"]
+                for call in self.batch_repository.create.await_args_list
+            ],
+            [first.id, second.id],
+        )
+        self.assertEqual(
+            [
+                call.kwargs["product_id"]
+                for call in self.inventory_service.append_movement.await_args_list
+            ],
+            [first.id, second.id],
+        )
 
     async def test_chicken_opening_stock_cannot_exceed_block_capacity(self):
+        self.add_chicken_product()
         request = self.request(
             "chickens",
             chicken_batches=[
@@ -170,6 +277,7 @@ class InventoryOpeningSetupServiceTests(unittest.IsolatedAsyncioTestCase):
         self.setup_repository.create.assert_not_awaited()
 
     async def test_hatch_date_cannot_follow_opening_stock_date(self):
+        self.add_chicken_product()
         request = self.request(
             "chickens",
             chicken_batches=[

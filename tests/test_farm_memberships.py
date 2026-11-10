@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.core.exceptions import AuthorizationError, ResourceNotFoundError
+from app.core.exceptions import AuthorizationError, ConflictError, ResourceNotFoundError
 from app.core.request_context import auth_user_id_context
 from app.dependencies.farm import get_farm_manager, get_farm_owner, get_owned_farm
 from app.schemas.enums import (
@@ -34,7 +34,7 @@ def make_user():
 
 
 def make_farm(owner_id):
-    return SimpleNamespace(id=uuid4(), owner_id=owner_id)
+    return SimpleNamespace(id=uuid4(), owner_id=owner_id, name="Test Farm")
 
 
 @pytest.mark.asyncio
@@ -144,9 +144,51 @@ class FakeMembershipRepository:
 class FakeUserRepository:
     def __init__(self, user):
         self.user = user
+        self.created = []
 
     async def get_by_email(self, email):
-        return self.user if self.user.email == email else None
+        if self.user is not None and self.user.email == email:
+            return self.user
+        return None
+
+    async def create(self, user):
+        user.id = uuid4()
+        user.is_active = True
+        self.created.append(user)
+        return user
+
+
+class FakeNotificationOutboxRepository:
+    def __init__(self):
+        self.events = []
+
+    async def enqueue(self, **event):
+        self.events.append(event)
+
+
+class ConfiguredEmailService:
+    is_configured = True
+
+    def __init__(self):
+        self.sent = []
+
+    async def send_farm_invitation(self, **kwargs):
+        self.sent.append(kwargs)
+
+
+class FailingEmailService(ConfiguredEmailService):
+    def __init__(self):
+        super().__init__()
+        self.attempts = 0
+
+    async def send_farm_invitation(self, **_kwargs):
+        self.attempts += 1
+        raise RuntimeError("SMTP delivery failed")
+        return user
+
+
+class UnconfiguredEmailService:
+    is_configured = False
 
 
 class FakeActivityRepository:
@@ -188,6 +230,7 @@ async def test_invite_creates_pending_membership_for_registered_account():
         membership_repository=repository,
         user_repository=FakeUserRepository(invited_user),
         unit_of_work=FakeUnitOfWork(),
+        email_service=UnconfiguredEmailService(),
     )
 
     membership = await service.invite(
@@ -200,6 +243,170 @@ async def test_invite_creates_pending_membership_for_registered_account():
     assert membership.user_id == invited_user.id
     assert membership.status == FarmMembershipStatus.INVITED
     assert membership.invited_by_id == owner.id
+
+
+@pytest.mark.asyncio
+async def test_owner_can_create_account_and_invite_user(monkeypatch):
+    owner = make_user()
+    farm = make_farm(owner.id)
+    membership_repository = FakeMembershipRepository()
+    user_repository = FakeUserRepository(None)
+
+    async def fake_hash_password(password):
+        return f"hashed:{password}"
+
+    monkeypatch.setattr(
+        "app.services.farm_membership_service.hash_password_async",
+        fake_hash_password,
+    )
+    service = FarmMembershipService(
+        membership_repository=membership_repository,
+        user_repository=user_repository,
+        unit_of_work=FakeUnitOfWork(),
+        email_service=UnconfiguredEmailService(),
+    )
+
+    membership = await service.invite(
+        farm=farm,
+        actor=owner,
+        email="  new.worker@example.com ",
+        role=FarmRole.WORKER,
+        create_account=True,
+        initial_password="farm2026",
+    )
+
+    assert len(user_repository.created) == 1
+    new_user = user_repository.created[0]
+    assert new_user.email == "new.worker@example.com"
+    assert new_user.password_hash == "hashed:farm2026"
+    assert new_user.app_security_setting is not None
+    assert membership.user_id == new_user.id
+    assert membership.status == FarmMembershipStatus.INVITED
+
+
+@pytest.mark.asyncio
+async def test_create_account_rejects_initial_password_shorter_than_eight_characters():
+    owner = make_user()
+    farm = make_farm(owner.id)
+    service = FarmMembershipService(
+        membership_repository=FakeMembershipRepository(),
+        user_repository=FakeUserRepository(None),
+        unit_of_work=FakeUnitOfWork(),
+    )
+
+    with pytest.raises(ConflictError, match="at least 8 characters"):
+        await service.invite(
+            farm=farm,
+            actor=owner,
+            email="new.worker@example.com",
+            role=FarmRole.WORKER,
+            create_account=True,
+            initial_password="farm123",
+        )
+
+
+@pytest.mark.asyncio
+async def test_invitation_sends_email_immediately():
+    owner = make_user()
+    invited_user = make_user()
+    farm = make_farm(owner.id)
+    outbox = FakeNotificationOutboxRepository()
+    email_service = ConfiguredEmailService()
+    service = FarmMembershipService(
+        membership_repository=FakeMembershipRepository(),
+        user_repository=FakeUserRepository(invited_user),
+        unit_of_work=FakeUnitOfWork(),
+        notification_outbox_repository=outbox,
+        email_service=email_service,
+    )
+
+    membership = await service.invite(
+        farm=farm,
+        actor=owner,
+        email=invited_user.email,
+        role=FarmRole.WORKER,
+    )
+
+    assert membership.invitation_email_status == "sent"
+    assert membership.invitation_email_sent_at is not None
+    assert len(email_service.sent) == 1
+    assert email_service.sent[0]["membership"] is membership
+    assert email_service.sent[0]["idempotency_key"] is not None
+    assert outbox.events == []
+
+
+@pytest.mark.asyncio
+async def test_invitation_queues_email_after_direct_send_fails():
+    owner = make_user()
+    invited_user = make_user()
+    farm = make_farm(owner.id)
+    outbox = FakeNotificationOutboxRepository()
+    email_service = FailingEmailService()
+    service = FarmMembershipService(
+        membership_repository=FakeMembershipRepository(),
+        user_repository=FakeUserRepository(invited_user),
+        unit_of_work=FakeUnitOfWork(),
+        notification_outbox_repository=outbox,
+        email_service=email_service,
+    )
+
+    membership = await service.invite(
+        farm=farm,
+        actor=owner,
+        email=invited_user.email,
+        role=FarmRole.WORKER,
+    )
+
+    assert membership.invitation_email_status == "queued"
+    assert membership.invitation_email_sent_at is None
+    assert email_service.attempts == 1
+    assert len(outbox.events) == 1
+    assert outbox.events[0]["event_type"] == "farm.invitation.email"
+    assert outbox.events[0]["payload"] == {"membership_id": str(membership.id)}
+
+
+@pytest.mark.asyncio
+async def test_manager_cannot_create_account():
+    owner = make_user()
+    manager = make_user()
+    farm = make_farm(owner.id)
+    service = FarmMembershipService(
+        membership_repository=FakeMembershipRepository(),
+        user_repository=FakeUserRepository(None),
+        unit_of_work=FakeUnitOfWork(),
+    )
+
+    with pytest.raises(AuthorizationError):
+        await service.invite(
+            farm=farm,
+            actor=manager,
+            email="new.worker@example.com",
+            role=FarmRole.WORKER,
+            create_account=True,
+            initial_password="long-initial-password",
+        )
+
+
+@pytest.mark.asyncio
+async def test_create_account_rejects_an_existing_email():
+    owner = make_user()
+    existing_user = make_user()
+    farm = make_farm(owner.id)
+    service = FarmMembershipService(
+        membership_repository=FakeMembershipRepository(),
+        user_repository=FakeUserRepository(existing_user),
+        unit_of_work=FakeUnitOfWork(),
+    )
+
+    with pytest.raises(ConflictError, match="already exists"):
+        await service.invite(
+            farm=farm,
+            actor=owner,
+            email=existing_user.email,
+            role=FarmRole.WORKER,
+            create_account=True,
+            initial_password="long-initial-password",
+        )
 
 
 @pytest.mark.asyncio

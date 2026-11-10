@@ -311,9 +311,16 @@ class PurchaseReceiptService:
                             {
                                 **batch_data,
                                 "name": batch_name,
+                                "product_id": transaction_item.product_id,
                                 "hatch_date": hatch_date,
                             },
                         )
+                    elif batch.product_id not in (None, transaction_item.product_id):
+                        raise ConflictError(
+                            f"Batch '{batch.name}' is not linked to the selected chicken product."
+                        )
+                    elif batch.product_id is None:
+                        batch.product_id = transaction_item.product_id
 
                     if chicken_transaction_item is None:
                         chicken_transaction_item = (

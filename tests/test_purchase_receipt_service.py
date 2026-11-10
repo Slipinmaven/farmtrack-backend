@@ -237,6 +237,7 @@ class PurchaseReceiptServiceTests(unittest.IsolatedAsyncioTestCase):
         batch = (
             SimpleNamespace(
                 id=batch_id,
+                product_id=None,
                 status=ChickenBatchStatus.ACTIVE,
                 chicken_type=ChickenType.LAYERS,
                 hatch_date=None,
@@ -360,6 +361,7 @@ class PurchaseReceiptServiceTests(unittest.IsolatedAsyncioTestCase):
         product = SimpleNamespace(id=product_id, product_type=ProductType.CHICKENS)
         batch = SimpleNamespace(
             id=batch_id,
+            product_id=None,
             status=ChickenBatchStatus.ACTIVE,
             chicken_type=ChickenType.LAYERS,
             hatch_date=None,

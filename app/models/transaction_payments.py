@@ -16,6 +16,7 @@ from sqlalchemy import (
     Time,
     Uuid,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -32,6 +33,19 @@ class TransactionPayment(Base):
         CheckConstraint("amount > 0", name="ck_transaction_payments_amount_positive"),
         Index("ix_transaction_payments_transaction_id", "transaction_id"),
         Index("ix_transaction_payments_payment_date", "payment_date"),
+        Index(
+            "uq_transaction_payments_mpesa_reference",
+            text("lower(trim(reference_number))"),
+            unique=True,
+            postgresql_where=text(
+                "payment_method = 'MPESA' AND reference_number IS NOT NULL "
+                "AND btrim(reference_number) <> ''"
+            ),
+            sqlite_where=text(
+                "payment_method = 'MPESA' AND reference_number IS NOT NULL "
+                "AND trim(reference_number) <> ''"
+            ),
+        ),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)

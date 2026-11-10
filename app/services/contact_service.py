@@ -1,3 +1,4 @@
+import re
 from uuid import UUID
 
 from sqlalchemy.exc import IntegrityError
@@ -29,6 +30,48 @@ from app.services.activity_service import ActivityService
 from app.services.activity_details import activity_field_changes
 
 app_logger = get_application_logger()
+
+
+def _normalize_contact_phone(phone: str | None) -> str | None:
+    if not phone:
+        return None
+    digits = re.sub(r"[^0-9]", "", phone)
+    return digits or None
+
+
+def _normalize_contact_email(email: str | None) -> str | None:
+    normalized = email.strip().lower() if email else ""
+    return normalized or None
+
+
+def _duplicate_contact_field(error: IntegrityError) -> str | None:
+    original_error = error.orig
+    while original_error is not None:
+        constraint_name = getattr(original_error, "constraint_name", None)
+        if constraint_name is None:
+            constraint_name = getattr(
+                getattr(original_error, "diag", None),
+                "constraint_name",
+                None,
+            )
+        if constraint_name == "uq_contacts_farm_phone_normalized":
+            return "phone"
+        if constraint_name == "uq_contacts_farm_email_normalized":
+            return "email"
+        original_error = original_error.__cause__ or original_error.__context__
+    return None
+
+
+def _duplicate_contact_message(field: str) -> str:
+    if field == "phone":
+        return (
+            "This phone number is already used by another contact on this farm. "
+            "Choose that contact or enter a different number."
+        )
+    return (
+        "This email address is already used by another contact on this farm. "
+        "Choose that contact or enter a different email address."
+    )
 
 
 def _is_duplicate_contact_role(error: IntegrityError) -> bool:
@@ -118,37 +161,53 @@ class ContactService:
         farm: Farm,
         contact_data: ContactCreateRequest,
     ) -> ContactResponse:
-        async with self.unit_of_work:
-            contact = await self.contact_repository.create(
-                farm.id,
-                contact_data.model_dump(exclude={"role"}),
-            )
-            contact_role = await self.contact_role_repository.create(
-                contact.id,
-                contact_data.role,
-            )
-            await self.activity_service.record(
-                farm_id=farm.id,
-                user_id=farm.owner_id,
-                activity_type=ActivityType.CONTACT_CREATED,
-                entity_type=ActivityEntityType.CONTACT,
-                entity_id=contact.id,
-                details={
-                    "name": contact.name,
-                    "role": contact_role.role.value,
-                    "phone": contact.phone,
-                    "email": contact.email,
-                    "address": contact.address,
-                    "notes": contact.notes,
-                },
-            )
-            await self.unit_of_work.commit()
-            response = self._to_contact_response(contact, [contact_role])
-            app_logger.info(
-                "contact_created",
-                extra={"event": "contact_created", "user_id": farm.owner_id, "farm_id": farm.id},
-            )
-            return response
+        phone_normalized = _normalize_contact_phone(contact_data.phone)
+        email_normalized = _normalize_contact_email(contact_data.email)
+        try:
+            async with self.unit_of_work:
+                await self._validate_contact_identity(
+                    farm.id,
+                    phone_normalized,
+                    email_normalized,
+                )
+                contact_fields = contact_data.model_dump(exclude={"role"})
+                contact_fields["phone_normalized"] = phone_normalized
+                contact_fields["email_normalized"] = email_normalized
+                contact = await self.contact_repository.create(
+                    farm.id,
+                    contact_fields,
+                )
+                contact_role = await self.contact_role_repository.create(
+                    contact.id,
+                    contact_data.role,
+                )
+                await self.activity_service.record(
+                    farm_id=farm.id,
+                    user_id=farm.owner_id,
+                    activity_type=ActivityType.CONTACT_CREATED,
+                    entity_type=ActivityEntityType.CONTACT,
+                    entity_id=contact.id,
+                    details={
+                        "name": contact.name,
+                        "role": contact_role.role.value,
+                        "phone": contact.phone,
+                        "email": contact.email,
+                        "address": contact.address,
+                        "notes": contact.notes,
+                    },
+                )
+                await self.unit_of_work.commit()
+                response = self._to_contact_response(contact, [contact_role])
+                app_logger.info(
+                    "contact_created",
+                    extra={"event": "contact_created", "user_id": farm.owner_id, "farm_id": farm.id},
+                )
+                return response
+        except IntegrityError as error:
+            duplicate_field = _duplicate_contact_field(error)
+            if duplicate_field is None:
+                raise
+            raise ConflictError(_duplicate_contact_message(duplicate_field)) from error
 
     async def update_contact(
         self,
@@ -156,40 +215,84 @@ class ContactService:
         contact_id: UUID,
         contact_data: ContactUpdateRequest,
     ) -> ContactResponse:
-        async with self.unit_of_work:
-            contact = await self._get_contact_or_raise(farm.id, contact_id)
-            update_data = contact_data.model_dump(exclude_unset=True)
-            before_values = {
-                field: getattr(contact, field) for field in update_data
-            }
-            for field, value in update_data.items():
-                setattr(contact, field, value)
-            contact = await self.contact_repository.update(contact)
-            contact_roles = await self.contact_role_repository.list_by_contact(contact.id)
-            changes = activity_field_changes(
-                before_values,
-                {field: getattr(contact, field) for field in update_data},
-            )
-            if changes:
-                details: dict[str, object] = {
-                    "name": contact.name,
-                    "changes": changes,
-                }
-                await self.activity_service.record(
-                    farm_id=farm.id,
-                    user_id=farm.owner_id,
-                    activity_type=ActivityType.CONTACT_UPDATED,
-                    entity_type=ActivityEntityType.CONTACT,
-                    entity_id=contact.id,
-                    details=details,
+        try:
+            async with self.unit_of_work:
+                contact = await self._get_contact_or_raise(farm.id, contact_id)
+                update_data = contact_data.model_dump(exclude_unset=True)
+                phone_normalized = (
+                    _normalize_contact_phone(update_data["phone"])
+                    if "phone" in update_data
+                    else contact.phone_normalized
                 )
-            await self.unit_of_work.commit()
-            response = self._to_contact_response(contact, contact_roles)
-            app_logger.info(
-                "contact_updated",
-                extra={"event": "contact_updated", "user_id": farm.owner_id, "farm_id": farm.id},
-            )
-            return response
+                email_normalized = (
+                    _normalize_contact_email(update_data["email"])
+                    if "email" in update_data
+                    else contact.email_normalized
+                )
+                await self._validate_contact_identity(
+                    farm.id,
+                    phone_normalized,
+                    email_normalized,
+                    exclude_contact_id=contact.id,
+                )
+                before_values = {
+                    field: getattr(contact, field) for field in update_data
+                }
+                for field, value in update_data.items():
+                    setattr(contact, field, value)
+                contact.phone_normalized = phone_normalized
+                contact.email_normalized = email_normalized
+                contact = await self.contact_repository.update(contact)
+                contact_roles = await self.contact_role_repository.list_by_contact(contact.id)
+                changes = activity_field_changes(
+                    before_values,
+                    {field: getattr(contact, field) for field in update_data},
+                )
+                if changes:
+                    details: dict[str, object] = {
+                        "name": contact.name,
+                        "changes": changes,
+                    }
+                    await self.activity_service.record(
+                        farm_id=farm.id,
+                        user_id=farm.owner_id,
+                        activity_type=ActivityType.CONTACT_UPDATED,
+                        entity_type=ActivityEntityType.CONTACT,
+                        entity_id=contact.id,
+                        details=details,
+                    )
+                await self.unit_of_work.commit()
+                response = self._to_contact_response(contact, contact_roles)
+                app_logger.info(
+                    "contact_updated",
+                    extra={"event": "contact_updated", "user_id": farm.owner_id, "farm_id": farm.id},
+                )
+                return response
+        except IntegrityError as error:
+            duplicate_field = _duplicate_contact_field(error)
+            if duplicate_field is None:
+                raise
+            raise ConflictError(_duplicate_contact_message(duplicate_field)) from error
+
+    async def _validate_contact_identity(
+        self,
+        farm_id: UUID,
+        phone_normalized: str | None,
+        email_normalized: str | None,
+        exclude_contact_id: UUID | None = None,
+    ) -> None:
+        if phone_normalized and await self.contact_repository.phone_is_in_use(
+            farm_id,
+            phone_normalized,
+            exclude_contact_id,
+        ):
+            raise ConflictError(_duplicate_contact_message("phone"))
+        if email_normalized and await self.contact_repository.email_is_in_use(
+            farm_id,
+            email_normalized,
+            exclude_contact_id,
+        ):
+            raise ConflictError(_duplicate_contact_message("email"))
 
     async def delete_contact(self, farm: Farm, contact_id: UUID) -> None:
         async with self.unit_of_work:

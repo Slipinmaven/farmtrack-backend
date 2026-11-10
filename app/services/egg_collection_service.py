@@ -71,7 +71,7 @@ class EggCollectionService:
             for item in request.items:
                 product = products.get(item.product_id)
                 if product is None:
-                    product = await self.product_repository.get_by_id(
+                    product = await self.product_repository.get_by_id_for_update(
                         farm.id,
                         item.product_id,
                     )

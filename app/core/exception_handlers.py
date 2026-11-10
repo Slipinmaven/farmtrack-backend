@@ -5,7 +5,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.core.config import settings
 from app.core.exceptions import AppError
-from app.core.logging import get_logger, request_id_context
+from app.core.logging import get_logger, redact_sensitive_path, request_id_context
 
 logger = get_logger("api")
 
@@ -40,7 +40,7 @@ async def app_error_handler(request: Request, exc: Exception) -> JSONResponse:
 		"application_error",
 		extra={
 			"event": "application_error",
-			"path": request.url.path,
+			"path": redact_sensitive_path(request.url.path),
 			"status": exc.status_code,
 			"request_id": request_id,
 			"error_code": exc.code,
@@ -89,7 +89,7 @@ async def unexpected_error_handler(request: Request, exc: Exception) -> JSONResp
 		"unexpected_application_error",
 		extra={
 			"event": "unexpected_application_error",
-			"path": request.url.path,
+			"path": redact_sensitive_path(request.url.path),
 			"request_id": request_id,
 		},
 		exc_info=(type(exc), exc, exc.__traceback__),

@@ -373,6 +373,7 @@ class TransactionSettlementServiceTests(unittest.IsolatedAsyncioTestCase):
 
         batch = next(iter(self.chicken_batch_repository.batches.values()))
         self.assertEqual(batch.chicken_type, ChickenType.LAYERS)
+        self.assertEqual(batch.product_id, self.product.id)
         self.assertEqual(batch.hatch_date, date(2026, 9, 14))
         self.assertEqual(batch.name, "2026 October 12 Batch 1")
         self.assertEqual(
@@ -441,6 +442,7 @@ class TransactionSettlementServiceTests(unittest.IsolatedAsyncioTestCase):
             id=uuid4(),
             farm_id=self.farm.id,
             name="Current layers",
+            product_id=self.product.id,
             chicken_type=ChickenType.LAYERS,
             status=ChickenBatchStatus.ACTIVE,
         )
@@ -489,6 +491,62 @@ class TransactionSettlementServiceTests(unittest.IsolatedAsyncioTestCase):
             self.inventory.movements[0]["quantity_delta"],
             Decimal("-24.000"),
         )
+
+    async def test_chicken_goods_issue_rejects_batch_from_another_product(self):
+        self.product.product_type = ProductType.CHICKENS
+        self.service.payment_repository.list_by_transaction = self.list_overpaid
+        batch = SimpleNamespace(
+            id=uuid4(),
+            farm_id=self.farm.id,
+            name="Other product layers",
+            product_id=uuid4(),
+            chicken_type=ChickenType.LAYERS,
+            status=ChickenBatchStatus.ACTIVE,
+        )
+        self.chicken_batch_repository.batches[batch.id] = batch
+        block_id = next(iter(self.blocks))
+        self.batch_block_repository.rows[(batch.id, block_id)] = SimpleNamespace(
+            id=uuid4(),
+            batch_id=batch.id,
+            block_id=block_id,
+            quantity=30,
+        )
+        request = TransactionSettlementCreateRequest.model_validate(
+            {
+                "direction": "farm_to_contact",
+                "settlement_date": date(2026, 10, 12),
+                "reason": "Settle overpayment with chickens",
+                "lines": [
+                    {
+                        "kind": "goods",
+                        "product_id": str(self.product.id),
+                        "unit_id": str(self.product_unit.unit_id),
+                        "quantity": "1",
+                        "agreed_unit_value": "5.00",
+                        "chicken_placement": {
+                            "mode": "issue",
+                            "allocations": [
+                                {
+                                    "batch_id": str(batch.id),
+                                    "block_id": str(block_id),
+                                    "quantity": 12,
+                                }
+                            ],
+                        },
+                    }
+                ],
+            }
+        )
+
+        with self.assertRaisesRegex(ConflictError, "not linked to the selected"):
+            await self.service.create(self.farm, self.transaction_id, request)
+
+        self.assertEqual(
+            self.batch_block_repository.rows[(batch.id, block_id)].quantity,
+            30,
+        )
+        self.assertEqual(self.settlements.records, [])
+        self.assertEqual(self.inventory.movements, [])
 
     async def test_chicken_goods_require_a_recorded_placement(self):
         self.product.product_type = ProductType.CHICKENS

@@ -26,6 +26,7 @@ class ActivityFeedResponse(BaseModel):
     items: list[ActivityResponse]
     next_cursor: str | None
     has_more: bool
+    total_count: int | None = None
 
 
 class ActivitySummaryResponse(BaseModel):

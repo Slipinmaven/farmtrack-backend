@@ -1,5 +1,6 @@
 import unittest
 from datetime import date, datetime
+from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import AsyncMock
@@ -234,8 +235,10 @@ class ChickenLossServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.inventory[(self.layers_batch_id, self.block_ids[0])].quantity, 100)
         self.assertEqual(self.loss_repository.losses, [])
 
-    async def test_opening_batch_loss_does_not_require_purchase_product_link(self):
+    async def test_opening_batch_loss_reduces_the_linked_product_ledger(self):
         self.batches[self.layers_batch_id].is_opening_stock = True
+        product_id = uuid4()
+        self.batches[self.layers_batch_id].product_id = product_id
         inventory_service = SimpleNamespace(append_movement=AsyncMock())
         service = ChickenLossService(
             loss_repository=cast(Any, self.loss_repository),
@@ -263,7 +266,45 @@ class ChickenLossServiceTests(unittest.IsolatedAsyncioTestCase):
         result = await service.create_losses(self.farm, request)
 
         self.assertEqual(result[0].quantity, 1)
-        inventory_service.append_movement.assert_not_awaited()
+        inventory_service.append_movement.assert_awaited_once()
+        movement = inventory_service.append_movement.await_args.kwargs
+        self.assertEqual(movement["product_id"], product_id)
+        self.assertEqual(movement["quantity_delta"], -Decimal("1"))
+        self.assertEqual(movement["movement_type"].value, "loss")
+
+    async def test_settlement_received_batch_loss_reduces_its_product_ledger(self):
+        product_id = uuid4()
+        self.batches[self.layers_batch_id].product_id = product_id
+        inventory_service = SimpleNamespace(append_movement=AsyncMock())
+        service = ChickenLossService(
+            loss_repository=cast(Any, self.loss_repository),
+            chicken_batch_repository=cast(Any, FakeBatchRepository(self.batches)),
+            batch_block_repository=cast(Any, self.batch_block_repository),
+            unit_of_work=cast(Any, FakeUnitOfWork()),
+            activity_service=cast(Any, self.activity_service),
+            chicken_transaction_item_repository=cast(
+                Any,
+                SimpleNamespace(list_by_batch=AsyncMock(return_value=[])),
+            ),
+            inventory_service=cast(Any, inventory_service),
+        )
+        request = self._request(
+            [
+                {
+                    "batch_id": str(self.layers_batch_id),
+                    "block_id": str(self.block_ids[0]),
+                    "quantity": 2,
+                    "reason": ChickenLossReason.NATURAL_DEATH.value,
+                }
+            ]
+        )
+
+        result = await service.create_losses(self.farm, request)
+
+        self.assertEqual(result[0].quantity, 2)
+        movement = inventory_service.append_movement.await_args.kwargs
+        self.assertEqual(movement["product_id"], product_id)
+        self.assertEqual(movement["quantity_delta"], -Decimal("2"))
 
     async def test_missing_batch_and_inactive_batch_are_rejected(self):
         unknown_batch_id = uuid4()

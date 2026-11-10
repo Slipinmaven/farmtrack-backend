@@ -120,6 +120,29 @@ class EggCollectionRepository:
             for product_id, quantity in result.all()
         }
 
+    async def get_opening_stock_totals_by_farm(
+        self,
+        farm_id: UUID,
+    ) -> dict[UUID, Decimal]:
+        result = await self.session.execute(
+            select(
+                EggCollection.product_id,
+                func.coalesce(
+                    func.sum(EggCollection.quantity * EggCollection.conversion_factor),
+                    0,
+                ),
+            )
+            .where(
+                EggCollection.farm_id == farm_id,
+                EggCollection.entry_type == "opening_stock",
+            )
+            .group_by(EggCollection.product_id)
+        )
+        return {
+            product_id: Decimal(quantity)
+            for product_id, quantity in result.all()
+        }
+
     async def create_many(
         self,
         farm_id: UUID,

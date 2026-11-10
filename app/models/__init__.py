@@ -58,6 +58,9 @@ from app.models.reminders import Reminder
 from app.models.inventory_movement import InventoryMovement
 from app.models.transaction_settlements import TransactionSettlement
 from app.models.inventory_opening_setup import InventoryOpeningSetup
+from app.models.egg_production_cost_confirmations import EggProductionCostConfirmation
+from app.models.app_release import AppRelease
+from app.models.download_token import DownloadToken
 
 __all__ = [
     "Base",
@@ -116,4 +119,7 @@ __all__ = [
     "InventoryMovement",
     "TransactionSettlement",
     "InventoryOpeningSetup",
+    "EggProductionCostConfirmation",
+    "AppRelease",
+    "DownloadToken",
 ]

@@ -4,9 +4,11 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.dependencies.farm import get_owned_farm
-from app.dependencies.services import get_profitability_report_service
+from app.presentation.dependencies.services import get_profitability_report_service
 from app.models.farm import Farm
 from app.schemas.profitability_report import (
+    EggProductionCostConfirmationRequest,
+    EggProductionCostConfirmationResponse,
     ProfitabilityReportResponse,
     ProfitabilityStockValuationRequest,
     ProfitabilityStockValuationResponse,
@@ -39,6 +41,26 @@ async def get_profitability_report(
         farm.id,
         from_date=from_date,
         to_date=to_date,
+    )
+
+
+@router.post(
+    "/profitability/confirm-zero-egg-production-cost",
+    response_model=EggProductionCostConfirmationResponse,
+)
+async def confirm_zero_egg_production_cost(
+    farm: Annotated[Farm, Depends(get_owned_farm)],
+    service: Annotated[
+        ProfitabilityReportService,
+        Depends(get_profitability_report_service),
+    ],
+    request: EggProductionCostConfirmationRequest,
+) -> EggProductionCostConfirmationResponse:
+    return await service.confirm_zero_egg_production_cost(
+        farm.id,
+        user_id=farm.owner_id,
+        from_date=request.from_date,
+        to_date=request.to_date,
     )
 
 

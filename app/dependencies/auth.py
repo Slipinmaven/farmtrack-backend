@@ -7,7 +7,7 @@ from jwt import PyJWTError
 from app.core.exceptions import AuthenticationError
 from app.core.request_context import auth_session_id_context, auth_user_id_context
 from app.core.security import decode_access_token
-from app.dependencies.services import get_auth_service
+from app.presentation.dependencies.services import get_auth_service
 from app.models.user import User
 from app.services.auth_service import AuthService
 

@@ -157,6 +157,10 @@ class PurchaseReturnService:
                         raise ConflictError(
                             "Chickens can only be returned from an active batch."
                         )
+                    if linked_batch.batch.product_id != product.id:
+                        raise ConflictError(
+                            f"Batch '{linked_batch.batch.name}' is not linked to the selected chicken product."
+                        )
 
                 ordered_quantity = self._base_quantity(transaction_item)
                 if is_chicken and ordered_quantity != ordered_quantity.to_integral_value():

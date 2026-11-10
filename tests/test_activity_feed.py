@@ -108,6 +108,10 @@ class ActivityFeedTests(unittest.TestCase):
                 self.kwargs = kwargs
                 return activities
 
+            async def count_for_farm(self, **kwargs: object) -> int:
+                self.count_kwargs = kwargs
+                return 3
+
         repository = RepositoryStub()
         service = ActivityService(
             cast(ActivityRepository, repository),
@@ -128,12 +132,19 @@ class ActivityFeedTests(unittest.TestCase):
         self.assertEqual(len(response.items), 1)
         self.assertTrue(response.has_more)
         self.assertIsNotNone(response.next_cursor)
+        self.assertEqual(response.total_count, 3)
         assert repository.kwargs is not None
         self.assertEqual(repository.kwargs["limit"], 2)
         self.assertEqual(repository.kwargs["search"], "twelve eggs")
         self.assertEqual(repository.kwargs["category"], ActivityCategory.EGGS)
         self.assertEqual(repository.kwargs["from_datetime"], range_start)
         self.assertEqual(repository.kwargs["to_datetime"], range_end)
+        assert repository.count_kwargs is not None
+        self.assertEqual(repository.count_kwargs["farm_id"], farm_id)
+        self.assertEqual(repository.count_kwargs["search"], "twelve eggs")
+        self.assertEqual(repository.count_kwargs["category"], ActivityCategory.EGGS)
+        self.assertEqual(repository.count_kwargs["from_datetime"], range_start)
+        self.assertEqual(repository.count_kwargs["to_datetime"], range_end)
 
     def test_get_activity_is_scoped_to_the_selected_farm(self):
         farm_id = uuid4()

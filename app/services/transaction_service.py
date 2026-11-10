@@ -234,6 +234,30 @@ class TransactionService:
                 if transaction.contact_id is not None
                 else None
             )
+            if (
+                transaction.transaction_type == TransactionType.SALE
+                and (
+                    balances.balance_due > Decimal("0.00")
+                    or balances.credit_balance > Decimal("0.00")
+                )
+                and (contact is None or not contact.name.strip())
+            ):
+                raise ConflictError(
+                    "A customer with a name is required to track a sale balance or credit."
+                )
+            if (
+                transaction.transaction_type == TransactionType.SALE
+                and (
+                    balances.balance_due > Decimal("0.00")
+                    or balances.credit_balance > Decimal("0.00")
+                )
+                and contact is not None
+                and not any(
+                    role.role == ContactRoleEnum.CUSTOMER
+                    for role in contact.contact_roles
+                )
+            ):
+                raise ConflictError("The linked sale contact is not a customer.")
             await self.activity_service.record(
                 farm_id=farm_id,
                 user_id=user_id,
@@ -389,6 +413,19 @@ class TransactionService:
                     )
                 except ValueError as exc:
                     raise ConflictError(str(exc)) from exc
+                if transaction_data.transaction_type == TransactionType.SALE:
+                    sale_total = sum(line_subtotals, Decimal("0.00")) - discount_amount
+                    initial_paid = sum(
+                        (payment.amount for payment in transaction_data.payments),
+                        Decimal("0.00"),
+                    )
+                    if (
+                        sale_total != initial_paid
+                        and (contact is None or not contact.name.strip())
+                    ):
+                        raise ConflictError(
+                            "A customer with a name is required to track a sale balance or credit."
+                        )
                 transaction_fields["discount_amount"] = discount_amount
                 transaction_fields["transaction_date"] = transaction_date
                 transaction_fields["reference_number"] = reference_number
@@ -402,7 +439,7 @@ class TransactionService:
                 expense_items: list[tuple[str, ProductType, Decimal]] = []
                 transaction_total = Decimal("0.00")
                 for item_index, item in enumerate(transaction_data.items):
-                    product = await self.product_repository.get_by_id(
+                    product = await self.product_repository.get_by_id_for_update(
                         farm_id,
                         item.product_id,
                     )
@@ -623,24 +660,6 @@ class TransactionService:
                         },
                         dedupe_key=f"transaction.recorded:{transaction.id}",
                     )
-                    for payment in payment_models:
-                        await self.notification_outbox_repository.enqueue(
-                            farm_id=farm_id,
-                            event_type=NotificationEventType.PAYMENT_RECORDED.value,
-                            payload={
-                                "transaction_id": str(transaction.id),
-                                "payment_id": str(payment.id),
-                                "payment_amount": str(payment.amount),
-                                "transaction_type": transaction.transaction_type.value,
-                                "reference_number": transaction.reference_number,
-                                "currency": (
-                                    farm_settings.currency
-                                    if farm_settings is not None
-                                    else None
-                                ),
-                            },
-                            dedupe_key=f"payment.recorded:{payment.id}",
-                        )
                 if commit:
                     await self.unit_of_work.commit()
 

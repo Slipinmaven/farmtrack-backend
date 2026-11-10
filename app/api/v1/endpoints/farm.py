@@ -10,7 +10,7 @@ from fastapi import File, UploadFile
 from typing import Annotated
 from app.dependencies.auth import get_current_user
 from app.dependencies.farm import get_farm_manager, get_farm_owner
-from app.dependencies.services import get_farm_membership_service, get_farm_service
+from app.presentation.dependencies.services import get_farm_membership_service, get_farm_service
 from app.schemas.farm import (
     FarmCreateRequest,
     FarmResponse,
@@ -117,6 +117,12 @@ async def invite_farm_member(
         actor=current_user,
         email=str(request.email),
         role=request.role,
+        create_account=request.create_account,
+        initial_password=(
+            request.initial_password.get_secret_value()
+            if request.initial_password is not None
+            else None
+        ),
     )
 
 
@@ -156,6 +162,23 @@ async def revoke_farm_member(
         membership_id=membership_id,
     )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post(
+    "/{farm_id}/members/{membership_id}/resend-invitation",
+    response_model=FarmMembershipResponse,
+)
+async def resend_farm_invitation(
+    membership_id: UUID,
+    farm: Farm = Depends(get_farm_manager),
+    current_user: User = Depends(get_current_user),
+    service: FarmMembershipService = Depends(get_farm_membership_service),
+) -> FarmMembership:
+    return await service.resend_invitation(
+        farm=farm,
+        actor=current_user,
+        membership_id=membership_id,
+    )
 
 
 @router.patch("/{farm_id}", response_model=FarmResponse)

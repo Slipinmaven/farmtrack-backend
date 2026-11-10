@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 from sqlalchemy import inspect
+from sqlalchemy.dialects import postgresql
 
 from app.core.exceptions import ConflictError, ResourceNotFoundError
 from app.models.expense_payment import ExpensePayment
@@ -181,6 +182,10 @@ class FakeExpenseRepository:
 
     async def list_by_farm(self, farm_id, *, offset=0, limit=50, **filters):
         rows = [row for row in self.rows if row.farm_id == farm_id]
+        category = filters.get("category")
+        if category is not None:
+            categories = set(category) if isinstance(category, list) else {category}
+            rows = [row for row in rows if row.category in categories]
         return rows[offset : offset + limit], len(rows)
 
     async def get_by_id_for_update(self, farm_id, expense_id):
@@ -802,6 +807,31 @@ class ProductConsumptionExpenseServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(page.limit, 1)
         self.assertEqual(len(page.items), 1)
 
+    async def test_expense_list_filters_by_multiple_categories(self):
+        await self.expense_service.create_expense(
+            self.farm,
+            self._expense_request(name="Feed expense"),
+        )
+        await self.expense_service.create_expense(
+            self.farm,
+            self._expense_request(name="Equipment expense", category="equipment"),
+        )
+        await self.expense_service.create_expense(
+            self.farm,
+            self._expense_request(name="Other expense", category="other"),
+        )
+
+        page = await self.expense_service.list_expenses(
+            self.farm,
+            category=["feed_and_nutrition", "equipment"],
+        )
+
+        self.assertEqual(page.total_count, 2)
+        self.assertEqual(
+            {expense.name for expense in page.items},
+            {"Feed expense", "Equipment expense"},
+        )
+
     async def test_expense_summary_aggregates_for_reports(self):
         await self.expense_service.create_expense(
             self.farm,
@@ -833,6 +863,38 @@ class ProductConsumptionExpenseServiceTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ExpenseRepositoryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_list_by_farm_filters_multiple_categories(self):
+        class ResultStub:
+            def scalar_one(self):
+                return 0
+
+            def scalars(self):
+                return self
+
+            def unique(self):
+                return self
+
+            def all(self):
+                return []
+
+        class SessionStub:
+            def __init__(self):
+                self.statements = []
+
+            async def execute(self, statement):
+                self.statements.append(statement)
+                return ResultStub()
+
+        session = SessionStub()
+        repository = ExpenseRepository(cast(Any, session))
+        await repository.list_by_farm(
+            uuid4(),
+            category=["feed_and_nutrition", "equipment"],
+        )
+
+        sql = str(session.statements[0].compile(dialect=postgresql.dialect()))
+        self.assertIn("expenses.category IN", sql)
+
     def test_expense_response_uses_purchased_product_name(self):
         now = datetime.now(timezone.utc)
         expense = SimpleNamespace(

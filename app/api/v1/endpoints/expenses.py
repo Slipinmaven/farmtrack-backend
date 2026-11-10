@@ -5,7 +5,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, status
 
 from app.dependencies.farm import get_owned_farm
-from app.dependencies.services import get_expense_service
+from app.presentation.dependencies.services import get_expense_service
 from app.models.farm import Farm
 from app.schemas.expense import (
     ExpenseCancelRequest,
@@ -32,7 +32,7 @@ router = APIRouter(
 async def list_expenses(
     farm: Annotated[Farm, Depends(get_owned_farm)],
     service: Annotated[ExpenseService, Depends(get_expense_service)],
-    category: Annotated[str | None, Query(min_length=1, max_length=80)] = None,
+    category: Annotated[list[str] | None, Query(min_length=1, max_length=80)] = None,
     contact_id: Annotated[UUID | None, Query()] = None,
     block_id: Annotated[UUID | None, Query()] = None,
     from_date: Annotated[date | None, Query()] = None,

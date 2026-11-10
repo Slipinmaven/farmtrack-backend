@@ -4,10 +4,14 @@ from uuid import UUID
 from fastapi import APIRouter, Depends
 
 from app.dependencies.farm import get_owned_farm
-from app.dependencies.services import get_reminder_service
+from app.presentation.dependencies.services import get_reminder_service
 from app.models.farm import Farm
 from app.schemas.enums import ReminderStatus
-from app.schemas.reminder import ReminderCreateRequest, ReminderResponse
+from app.schemas.reminder import (
+    ReminderCreateRequest,
+    ReminderResponse,
+    ReminderRescheduleRequest,
+)
 from app.services.reminder_service import ReminderService
 
 
@@ -38,6 +42,25 @@ async def get_reminder(
     service: Annotated[ReminderService, Depends(get_reminder_service)],
 ) -> ReminderResponse:
     return await service.get_for_farm(farm, reminder_id)
+
+
+@router.patch("/{reminder_id}/reschedule", response_model=ReminderResponse)
+async def reschedule_reminder(
+    reminder_id: UUID,
+    request: ReminderRescheduleRequest,
+    farm: Annotated[Farm, Depends(get_owned_farm)],
+    service: Annotated[ReminderService, Depends(get_reminder_service)],
+) -> ReminderResponse:
+    return await service.reschedule(farm, reminder_id, request)
+
+
+@router.patch("/{reminder_id}/reopen", response_model=ReminderResponse)
+async def reopen_reminder(
+    reminder_id: UUID,
+    farm: Annotated[Farm, Depends(get_owned_farm)],
+    service: Annotated[ReminderService, Depends(get_reminder_service)],
+) -> ReminderResponse:
+    return await service.reopen(farm, reminder_id)
 
 
 @router.patch("/{reminder_id}/complete", response_model=ReminderResponse)

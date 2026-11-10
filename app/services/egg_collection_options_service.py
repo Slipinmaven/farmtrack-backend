@@ -1,4 +1,5 @@
 from decimal import Decimal
+from uuid import UUID
 
 from app.core.logging import get_application_logger
 from app.core.unit_of_work import UnitOfWork
@@ -6,6 +7,9 @@ from app.models.farm import Farm
 from app.repositories.block_repository import BlockRepository
 from app.repositories.egg_collection_repository import EggCollectionRepository
 from app.repositories.egg_loss_repository import EggLossRepository
+from app.repositories.inventory_movement_repository import (
+    InventoryMovementRepository,
+)
 from app.repositories.product_repository import ProductRepository
 from app.repositories.transaction_item_repository import TransactionItemRepository
 from app.schemas.egg_collection import (
@@ -14,7 +18,7 @@ from app.schemas.egg_collection import (
     EggCollectionOptionsResponse,
     EggCollectionUnitOption,
 )
-from app.schemas.enums import ProductType
+from app.schemas.enums import InventoryMovementType, ProductType
 
 logger = get_application_logger()
 
@@ -26,6 +30,7 @@ class EggCollectionOptionsService:
         block_repository: BlockRepository,
         collection_repository: EggCollectionRepository,
         loss_repository: EggLossRepository,
+        inventory_movement_repository: InventoryMovementRepository,
         transaction_item_repository: TransactionItemRepository,
         unit_of_work: UnitOfWork,
     ) -> None:
@@ -33,6 +38,7 @@ class EggCollectionOptionsService:
         self.block_repository = block_repository
         self.collection_repository = collection_repository
         self.loss_repository = loss_repository
+        self.inventory_movement_repository = inventory_movement_repository
         self.transaction_item_repository = transaction_item_repository
         self.unit_of_work = unit_of_work
 
@@ -47,16 +53,61 @@ class EggCollectionOptionsService:
                     farm.id
                 )
             )
+            opening_stock_totals = (
+                await self.collection_repository.get_opening_stock_totals_by_farm(
+                    farm.id
+                )
+            )
             loss_totals = await self.loss_repository.get_totals_by_farm(farm.id)
             sold_totals = (
                 await self.transaction_item_repository.get_sold_base_quantities_by_farm(
                     farm.id
                 )
             )
+            egg_product_ids = [
+                product.id
+                for product in products
+                if product.is_active and product.product_type == ProductType.EGGS
+            ]
+            reserved_totals = (
+                await self.transaction_item_repository.get_reserved_base_quantities_by_farm(
+                    farm.id,
+                    egg_product_ids,
+                )
+            )
+            settlement_received_totals = (
+                await self.inventory_movement_repository.get_totals_by_type(
+                    farm.id,
+                    InventoryMovementType.SETTLEMENT_RECEIVED,
+                )
+            )
+            settlement_issued_totals = (
+                await self.inventory_movement_repository.get_totals_by_type(
+                    farm.id,
+                    InventoryMovementType.SETTLEMENT_ISSUED,
+                )
+            )
             blocks = await self.block_repository.list_by_farm(
                 farm.id,
                 is_active=True,
             )
+
+            def available_quantity(product_id: UUID) -> Decimal:
+                return max(
+                    collection_totals.get(product_id, Decimal("0.000"))
+                    - loss_totals.get(product_id, Decimal("0.000"))
+                    - sold_totals.get(product_id, Decimal("0.000"))
+                    + settlement_received_totals.get(
+                        product_id,
+                        Decimal("0.000"),
+                    )
+                    + settlement_issued_totals.get(
+                        product_id,
+                        Decimal("0.000"),
+                    ),
+                    Decimal("0.000"),
+                )
+
             response = EggCollectionOptionsResponse(
                 products=[
                     EggCollectionOptionsProduct(
@@ -74,6 +125,10 @@ class EggCollectionOptionsService:
                             )
                             for product_unit in product.product_units
                         ],
+                        opening_stock_quantity_in_base_unit=opening_stock_totals.get(
+                            product.id,
+                            Decimal("0.000"),
+                        ),
                         collected_quantity_in_base_unit=collected_totals.get(
                             product.id,
                             Decimal("0.000"),
@@ -86,21 +141,25 @@ class EggCollectionOptionsService:
                             product.id,
                             Decimal("0.000"),
                         ),
-                        available_quantity_in_base_unit=max(
-                            collection_totals.get(
+                        stock_adjustment_quantity_in_base_unit=(
+                            settlement_received_totals.get(
                                 product.id,
                                 Decimal("0.000"),
                             )
-                            - loss_totals.get(
+                            + settlement_issued_totals.get(
                                 product.id,
                                 Decimal("0.000"),
                             )
-                            - sold_totals.get(
-                                product.id,
-                                Decimal("0.000"),
-                            ),
+                        ),
+                        on_hand_quantity_in_base_unit=(
+                            available_quantity(product.id)
+                            + reserved_totals.get(product.id, Decimal("0.000"))
+                        ),
+                        reserved_quantity_in_base_unit=reserved_totals.get(
+                            product.id,
                             Decimal("0.000"),
                         ),
+                        available_quantity_in_base_unit=available_quantity(product.id),
                     )
                     for product in products
                     if product.is_active and product.product_type == ProductType.EGGS

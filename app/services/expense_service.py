@@ -148,7 +148,7 @@ class ExpenseService:
         self,
         farm: Farm,
         *,
-        category: str | None = None,
+        category: str | list[str] | None = None,
         contact_id: UUID | None = None,
         from_date: date | None = None,
         to_date: date | None = None,

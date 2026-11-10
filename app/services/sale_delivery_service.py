@@ -178,6 +178,10 @@ class SaleDeliveryService:
                         raise ConflictError(
                             "Chickens cannot be delivered from an inactive batch."
                         )
+                    if batch.product_id != transaction_item.product_id:
+                        raise ConflictError(
+                            f"Batch '{batch.name}' is not linked to the selected chicken product."
+                        )
                     if (
                         transaction_item.chicken_type is not None
                         and batch.chicken_type != transaction_item.chicken_type

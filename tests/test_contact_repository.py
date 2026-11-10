@@ -16,6 +16,9 @@ class FakeResult:
     def all(self):
         return []
 
+    def scalar_one_or_none(self):
+        return None
+
 
 class FakeSession:
     def __init__(self):
@@ -45,3 +48,27 @@ async def test_list_by_farm_filters_customer_search_and_caps_results():
     assert "LIMIT" in sql
     assert "OFFSET" in sql
     assert "%Mae%" in session.query.compile(dialect=sqlite.dialect()).params.values()
+
+
+@pytest.mark.asyncio
+async def test_phone_identity_check_includes_legacy_unnormalized_contacts():
+    session = FakeSession()
+    repository = ContactRepository(session=session)
+
+    await repository.phone_is_in_use(uuid4(), "14155550100")
+
+    sql = str(session.query.compile(dialect=sqlite.dialect()))
+    assert "contacts.phone_normalized" in sql
+    assert "regexp_replace(contacts.phone" in sql
+
+
+@pytest.mark.asyncio
+async def test_email_identity_check_includes_legacy_unnormalized_contacts():
+    session = FakeSession()
+    repository = ContactRepository(session=session)
+
+    await repository.email_is_in_use(uuid4(), "person@example.com")
+
+    sql = str(session.query.compile(dialect=sqlite.dialect()))
+    assert "contacts.email_normalized" in sql
+    assert "trim(contacts.email)" in sql

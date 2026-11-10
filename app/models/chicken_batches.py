@@ -31,6 +31,9 @@ class ChickenBatch(Base):
     farm_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("farms.id"), nullable=False
     )
+    product_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("products.id"), nullable=True
+    )
     name: Mapped[str] = mapped_column(String(100), nullable=False)
     chicken_type: Mapped[ChickenType] = mapped_column(SQLEnum(ChickenType), nullable=False, default=ChickenType.LAYERS)
     breed: Mapped[str | None] = mapped_column(String(100), nullable=True)

@@ -418,6 +418,10 @@ class TransactionSettlementService:
                     )
                 if batch.status != ChickenBatchStatus.ACTIVE:
                     raise ConflictError("Received chickens must enter an active batch.")
+                if batch.product_id != product.id:
+                    raise ConflictError(
+                        f"Batch '{batch.name}' is not linked to the selected chicken product."
+                    )
                 batch_rows[batch.id] = batch
                 for allocation in placement.allocations:
                     resolved_allocations.append(
@@ -455,6 +459,10 @@ class TransactionSettlementService:
                     if batch.status != ChickenBatchStatus.ACTIVE:
                         raise ConflictError(
                             "Chickens can only be issued from an active batch."
+                        )
+                    if batch.product_id != product.id:
+                        raise ConflictError(
+                            f"Batch '{batch.name}' is not linked to the selected chicken product."
                         )
                     batch_rows[batch.id] = batch
                     resolved_allocations.append(
@@ -556,6 +564,7 @@ class TransactionSettlementService:
                     farm.id,
                     {
                         "name": batch_name,
+                        "product_id": UUID(str(line["product_id"])),
                         "chicken_type": batch_request.chicken_type,
                         "hatch_date": hatch_date,
                         "status": ChickenBatchStatus.ACTIVE,

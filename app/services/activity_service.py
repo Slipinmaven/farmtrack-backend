@@ -127,6 +127,13 @@ class ActivityService:
                 from_datetime=from_datetime,
                 to_datetime=to_datetime,
             )
+            total_count = await self.repository.count_for_farm(
+                farm_id=farm.id,
+                search=search,
+                category=category,
+                from_datetime=from_datetime,
+                to_datetime=to_datetime,
+            )
             has_more = len(activities) > limit
             items = activities[:limit]
             next_cursor = self._encode_cursor(items[-1]) if has_more else None
@@ -137,6 +144,7 @@ class ActivityService:
                 ],
                 next_cursor=next_cursor,
                 has_more=has_more,
+                total_count=total_count,
             )
 
     async def get_for_farm(

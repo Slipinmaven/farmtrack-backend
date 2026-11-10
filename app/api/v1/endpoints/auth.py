@@ -5,8 +5,8 @@ from typing import Literal
 from fastapi import APIRouter, Depends, Query, Request, Response, status
 
 from app.dependencies.auth import get_current_user
-from app.dependencies.services import get_auth_service
-from app.dependencies.services import get_activity_service
+from app.presentation.dependencies.services import get_auth_service
+from app.presentation.dependencies.services import get_activity_service
 from app.models.user import User
 from app.schemas.auth import (
     AuthenticationResponse,

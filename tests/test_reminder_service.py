@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 from app.core.exceptions import ConflictError, ResourceNotFoundError
 from app.schemas.enums import ReminderStatus
-from app.schemas.reminder import ReminderCreateRequest
+from app.schemas.reminder import ReminderCreateRequest, ReminderRescheduleRequest
 from app.services.reminder_service import ReminderService, enqueue_due_reminder_notifications
 
 
@@ -166,6 +166,115 @@ class ReminderServiceTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ConflictError, "push token is required"):
             asyncio.run(service.create(_as_any(SimpleNamespace(id=uuid4())), request))
+
+    def test_pending_reminder_can_be_rescheduled_in_farm_timezone(self):
+        farm_id = uuid4()
+        reminder = SimpleNamespace(
+            id=uuid4(),
+            farm_id=farm_id,
+            title="Pay purchase balance",
+            description="Follow up with supplier.",
+            due_at=datetime(2026, 10, 13, 9, 0, tzinfo=UTC),
+            delivery_channel="in_app",
+            status=ReminderStatus.PENDING.value,
+            recurrence_rule=None,
+            related_entity_type="transaction",
+            related_entity_id=uuid4(),
+            created_at=datetime(2026, 10, 12, 9, 0, tzinfo=UTC),
+            completed_at=None,
+            notification_enqueued_at=None,
+        )
+        repository = FakeReminderRepository()
+        repository.reminders.append(reminder)
+        service = ReminderService(
+            _as_any(repository),
+            _as_any(FakeUnitOfWork()),
+            _as_any(FakeFarmSettingsRepository()),
+        )
+        request = ReminderRescheduleRequest(due_at=datetime(2026, 10, 14, 10, 30))
+        now = datetime(2026, 10, 12, 0, 0, tzinfo=UTC)
+        with patch("app.services.reminder_service.datetime") as clock:
+            clock.now.return_value = now
+            clock.UTC = UTC
+            result = asyncio.run(service.reschedule(
+                _as_any(SimpleNamespace(id=farm_id)),
+                reminder.id,
+                request,
+            ))
+
+        self.assertEqual(result.due_at, datetime(2026, 10, 13, 20, 30, tzinfo=UTC))
+        self.assertIsNone(reminder.notification_enqueued_at)
+
+    def test_sent_pending_reminder_can_be_snoozed_again(self):
+        farm_id = uuid4()
+        reminder = SimpleNamespace(
+            id=uuid4(),
+            farm_id=farm_id,
+            title="Pay purchase balance",
+            description="Follow up",
+            due_at=datetime(2026, 10, 13, 9, 0, tzinfo=UTC),
+            delivery_channel="in_app",
+            status=ReminderStatus.PENDING.value,
+            recurrence_rule=None,
+            related_entity_type="transaction",
+            related_entity_id=uuid4(),
+            created_at=datetime.now(UTC),
+            completed_at=None,
+            notification_enqueued_at=datetime.now(UTC),
+        )
+        repository = FakeReminderRepository()
+        repository.reminders.append(reminder)
+        service = ReminderService(
+            _as_any(repository),
+            _as_any(FakeUnitOfWork()),
+            _as_any(FakeFarmSettingsRepository()),
+        )
+
+        now = datetime.now(UTC)
+        with patch("app.services.reminder_service.datetime") as clock:
+            clock.now.return_value = now
+            clock.UTC = UTC
+            result = asyncio.run(service.reschedule(
+                _as_any(SimpleNamespace(id=farm_id)),
+                reminder.id,
+                ReminderRescheduleRequest(due_at=now + timedelta(days=1)),
+            ))
+        self.assertEqual(result.status, ReminderStatus.PENDING)
+        self.assertIsNone(reminder.notification_enqueued_at)
+
+    def test_completed_reminder_can_be_reopened(self):
+        farm_id = uuid4()
+        reminder = SimpleNamespace(
+            id=uuid4(),
+            farm_id=farm_id,
+            title="Pay purchase balance",
+            description="Follow up",
+            due_at=datetime.now(UTC) + timedelta(days=1),
+            delivery_channel="in_app",
+            status=ReminderStatus.COMPLETED.value,
+            recurrence_rule=None,
+            related_entity_type="transaction",
+            related_entity_id=uuid4(),
+            created_at=datetime.now(UTC),
+            completed_at=datetime.now(UTC),
+            notification_enqueued_at=datetime.now(UTC),
+        )
+        repository = FakeReminderRepository()
+        repository.reminders.append(reminder)
+        service = ReminderService(
+            _as_any(repository),
+            _as_any(FakeUnitOfWork()),
+            _as_any(FakeFarmSettingsRepository()),
+        )
+
+        result = asyncio.run(service.reopen(
+            _as_any(SimpleNamespace(id=farm_id)),
+            reminder.id,
+        ))
+
+        self.assertEqual(result.status, ReminderStatus.PENDING)
+        self.assertIsNone(reminder.completed_at)
+        self.assertIsNone(reminder.notification_enqueued_at)
 
     def test_recurring_reminders_are_explicitly_rejected(self):
         service = ReminderService(

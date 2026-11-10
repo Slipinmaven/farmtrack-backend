@@ -9,7 +9,9 @@ from app.models.transaction_items import TransactionItem
 from app.models.transactions import Transaction
 from app.models.sale_return_items import SaleReturnItem
 from app.models.sale_returns import SaleReturn
-from app.schemas.enums import TransactionStatus, TransactionType
+from app.models.sale_delivery_items import SaleDeliveryItem
+from app.models.sale_deliveries import SaleDelivery
+from app.schemas.enums import SaleReturnType, TransactionStatus, TransactionType
 
 
 class TransactionItemRepository:
@@ -131,3 +133,75 @@ class TransactionItemRepository:
             )
         )
         return Decimal(result.scalar_one())
+
+    async def get_reserved_base_quantities_by_farm(
+        self,
+        farm_id: UUID,
+        product_ids: list[UUID],
+    ) -> dict[UUID, Decimal]:
+        if not product_ids:
+            return {}
+
+        delivered_quantities = (
+            select(
+                SaleDeliveryItem.transaction_item_id.label("transaction_item_id"),
+                func.sum(SaleDeliveryItem.quantity).label("quantity"),
+            )
+            .join(SaleDelivery, SaleDelivery.id == SaleDeliveryItem.sale_delivery_id)
+            .group_by(SaleDeliveryItem.transaction_item_id)
+            .subquery()
+        )
+        cancelled_quantities = (
+            select(
+                SaleReturnItem.transaction_item_id.label("transaction_item_id"),
+                func.sum(SaleReturnItem.quantity).label("quantity"),
+            )
+            .join(SaleReturn, SaleReturn.id == SaleReturnItem.sale_return_id)
+            .where(
+                SaleReturn.return_type
+                == SaleReturnType.UNDELIVERED_CANCELLED.value
+            )
+            .group_by(SaleReturnItem.transaction_item_id)
+            .subquery()
+        )
+        result = await self.session.execute(
+            select(
+                TransactionItem.product_id,
+                TransactionItem.quantity,
+                TransactionItem.conversion_factor,
+                func.coalesce(delivered_quantities.c.quantity, 0),
+                func.coalesce(cancelled_quantities.c.quantity, 0),
+            )
+            .join(Transaction, Transaction.id == TransactionItem.transaction_id)
+            .outerjoin(
+                delivered_quantities,
+                delivered_quantities.c.transaction_item_id == TransactionItem.id,
+            )
+            .outerjoin(
+                cancelled_quantities,
+                cancelled_quantities.c.transaction_item_id == TransactionItem.id,
+            )
+            .where(
+                Transaction.farm_id == farm_id,
+                Transaction.transaction_type == TransactionType.SALE,
+                Transaction.status == TransactionStatus.COMPLETED,
+                Transaction.fulfillment_required.is_(True),
+                TransactionItem.product_id.in_(product_ids),
+            )
+        )
+        reserved: dict[UUID, Decimal] = {}
+        for (
+            product_id,
+            quantity,
+            conversion_factor,
+            delivered_quantity,
+            cancelled_quantity,
+        ) in result.all():
+            outstanding = max(
+                Decimal("0"),
+                Decimal(quantity) * Decimal(conversion_factor)
+                - Decimal(delivered_quantity)
+                - Decimal(cancelled_quantity),
+            )
+            reserved[product_id] = reserved.get(product_id, Decimal("0")) + outstanding
+        return reserved

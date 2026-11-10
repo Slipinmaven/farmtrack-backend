@@ -9,7 +9,7 @@ from pydantic import ValidationError
 from app.core.exceptions import ConflictError, ResourceNotFoundError
 from app.models.farm import Farm
 from app.schemas.egg_sale import EggSaleCreateRequest
-from app.schemas.enums import ProductType, TransactionType
+from app.schemas.enums import InventoryMovementType, ProductType, TransactionType
 from app.services.egg_sale_service import EggSaleService
 
 
@@ -64,6 +64,14 @@ class FakeTransactionItemRepository:
         return self.totals
 
 
+class FakeInventoryMovementRepository:
+    def __init__(self):
+        self.totals = {}
+
+    async def get_totals_by_type(self, farm_id, movement_type):
+        return self.totals.get(movement_type, {})
+
+
 class FakeTransactionService:
     def __init__(self):
         self.calls = []
@@ -103,6 +111,7 @@ class EggSaleServiceTests(unittest.IsolatedAsyncioTestCase):
         }
         self.product_repository = FakeProductRepository(products)
         self.transaction_item_repository = FakeTransactionItemRepository({})
+        self.inventory_movement_repository = FakeInventoryMovementRepository()
         self.transaction_service = FakeTransactionService()
         self.unit_of_work = FakeUnitOfWork()
         self.service = EggSaleService(
@@ -113,6 +122,10 @@ class EggSaleServiceTests(unittest.IsolatedAsyncioTestCase):
                 FakeTotalsRepository({self.product_id: Decimal("100.000")}),
             ),
             loss_repository=cast(Any, FakeTotalsRepository({})),
+            inventory_movement_repository=cast(
+                Any,
+                self.inventory_movement_repository,
+            ),
             transaction_item_repository=cast(
                 Any,
                 self.transaction_item_repository,
@@ -249,6 +262,50 @@ class EggSaleServiceTests(unittest.IsolatedAsyncioTestCase):
             )
 
         self.assertEqual(self.transaction_service.calls, [])
+
+    async def test_settlement_issued_eggs_are_subtracted_from_available_stock(self):
+        self.inventory_movement_repository.totals[
+            InventoryMovementType.SETTLEMENT_ISSUED
+        ] = {self.product_id: Decimal("-80.000")}
+
+        with self.assertRaises(ConflictError):
+            await self.service.create_sale(
+                self.farm,
+                self._request(
+                    items=[
+                        {
+                            "product_id": str(self.product_id),
+                            "unit_id": str(self.piece_unit_id),
+                            "quantity": "21",
+                            "unit_price": "0.40",
+                        }
+                    ]
+                ),
+            )
+
+        self.assertEqual(self.transaction_service.calls, [])
+        self.assertEqual(self.unit_of_work.commit_count, 0)
+
+    async def test_settlement_received_eggs_increase_available_stock(self):
+        self.inventory_movement_repository.totals[
+            InventoryMovementType.SETTLEMENT_RECEIVED
+        ] = {self.product_id: Decimal("30.000")}
+
+        await self.service.create_sale(
+            self.farm,
+            self._request(
+                items=[
+                    {
+                        "product_id": str(self.product_id),
+                        "unit_id": str(self.piece_unit_id),
+                        "quantity": "120",
+                        "unit_price": "0.40",
+                    }
+                ]
+            ),
+        )
+
+        self.assertEqual(len(self.transaction_service.calls), 1)
 
     async def test_rejects_products_not_sellable_or_not_eggs(self):
         self.product.is_sellable = False

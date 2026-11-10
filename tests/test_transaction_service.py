@@ -95,6 +95,14 @@ class FakeActivityService:
         self.events.append(event)
 
 
+class FakeNotificationOutboxRepository:
+    def __init__(self):
+        self.events = []
+
+    async def enqueue(self, **event):
+        self.events.append(event)
+
+
 class FakeInventoryService:
     def __init__(self):
         self.movements = []
@@ -204,6 +212,9 @@ class FakeProductRepository:
             return None
         return product
 
+    async def get_by_id_for_update(self, farm_id, product_id):
+        return await self.get_by_id(farm_id, product_id)
+
 
 class FakeProductUnitRepository:
     def __init__(self, product_units):
@@ -215,7 +226,7 @@ class FakeProductUnitRepository:
 
 class FakeFarmSettingsRepository:
     async def get_farm_settings(self, farm_id):
-        return SimpleNamespace(timezone="Pacific/Kiritimati")
+        return SimpleNamespace(timezone="Pacific/Kiritimati", currency="KES")
 
 
 class FakeTransactionReferenceCounterRepository:
@@ -362,6 +373,33 @@ class TransactionServiceTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(self.expense_repository.rows, [])
 
+    async def test_initial_payments_do_not_create_duplicate_transaction_notifications(self):
+        outbox = FakeNotificationOutboxRepository()
+        self.service.notification_outbox_repository = outbox
+
+        await self.service.create_transaction(
+            self.farm_id,
+            self._purchase_data(
+                [
+                    PaymentCreate(
+                        amount=Decimal("20000.00"),
+                        payment_date=date(2026, 10, 9),
+                        payment_method="cash",
+                    ),
+                    PaymentCreate(
+                        amount=Decimal("5000.00"),
+                        payment_date=date(2026, 10, 9),
+                        payment_method="mpesa",
+                    ),
+                ]
+            ),
+        )
+
+        self.assertEqual(
+            [event["event_type"] for event in outbox.events],
+            ["purchase.recorded"],
+        )
+
     async def test_non_poultry_purchase_is_recorded_as_linked_expense(self):
         self.products[self.product_ids[1]].product_type = ProductType.FEED
         purchase_request = self._purchase_data(
@@ -485,11 +523,18 @@ class TransactionServiceTests(unittest.IsolatedAsyncioTestCase):
             self.farm_id,
             self._purchase_data(transaction_date=date(2026, 10, 10)),
         )
+        customer_id = uuid4()
+        self.contact_repository.contact = SimpleNamespace(
+            id=customer_id,
+            name="Farm customer",
+            contact_roles=[SimpleNamespace(role=ContactRoleEnum.CUSTOMER)],
+        )
         sale = await self.service.create_transaction(
             self.farm_id,
             TransactionCreate(
                 transaction_type=TransactionType.SALE,
                 transaction_date=date(2026, 10, 9),
+                contact_id=customer_id,
                 items=[
                     {
                         "product_id": self.product_ids[0],
@@ -554,9 +599,16 @@ class TransactionServiceTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_products_not_sellable_are_rejected_for_sale(self):
         self.products[self.product_ids[0]].is_sellable = False
+        customer_id = uuid4()
+        self.contact_repository.contact = SimpleNamespace(
+            id=customer_id,
+            name="Farm customer",
+            contact_roles=[SimpleNamespace(role=ContactRoleEnum.CUSTOMER)],
+        )
         sale_data = TransactionCreate(
             transaction_type=TransactionType.SALE,
             transaction_date=date(2026, 10, 9),
+            contact_id=customer_id,
             items=[
                 {
                     "product_id": self.product_ids[0],
@@ -820,15 +872,83 @@ class TransactionServiceTests(unittest.IsolatedAsyncioTestCase):
             self.farm_id,
             transaction.id,
             PaymentCreate(
-                amount=Decimal("50.00"),
+                amount=Decimal("100.00"),
                 payment_date=date(2026, 10, 10),
                 payment_method="cash",
             ),
         )
 
-        self.assertEqual(result.amount_paid, Decimal("50.00"))
-        self.assertEqual(result.balance_due, Decimal("50.00"))
+        self.assertEqual(result.amount_paid, Decimal("100.00"))
+        self.assertEqual(result.balance_due, Decimal("0.00"))
         self.assertEqual(result.credit_balance, Decimal("0.00"))
+
+    async def test_additional_payment_rejects_anonymous_sale_balance(self):
+        transaction = SimpleNamespace(
+            id=uuid4(),
+            farm_id=self.farm_id,
+            contact_id=None,
+            reference_number=None,
+            transaction_type=TransactionType.SALE,
+            status=TransactionStatus.COMPLETED,
+            items=[SimpleNamespace(total_amount=Decimal("100.00"))],
+        )
+        transaction_service = TransactionService(
+            transaction_repository=FakeTransactionRepository(transaction),
+            transaction_item_repository=FakeTransactionItemRepository(),
+            transaction_payment_repository=FakePaymentRepository(),
+            contact_repository=self.contact_repository,
+            product_repository=FakeProductRepository(self.products),
+            product_unit_repository=FakeProductUnitRepository(self.product_units),
+            unit_of_work=FakeUnitOfWork(),
+            activity_service=self.activity_service,
+            sale_return_repository=FakeCreditRepository(),
+            transaction_refund_repository=FakeRefundRepository(),
+        )
+
+        with self.assertRaises(ConflictError):
+            await transaction_service.record_payment(
+                self.farm_id,
+                transaction.id,
+                PaymentCreate(
+                    amount=Decimal("50.00"),
+                    payment_date=date(2026, 10, 10),
+                    payment_method="cash",
+                ),
+            )
+
+    async def test_additional_payment_rejects_anonymous_sale_credit(self):
+        transaction = SimpleNamespace(
+            id=uuid4(),
+            farm_id=self.farm_id,
+            contact_id=None,
+            reference_number=None,
+            transaction_type=TransactionType.SALE,
+            status=TransactionStatus.COMPLETED,
+            items=[SimpleNamespace(total_amount=Decimal("100.00"))],
+        )
+        transaction_service = TransactionService(
+            transaction_repository=FakeTransactionRepository(transaction),
+            transaction_item_repository=FakeTransactionItemRepository(),
+            transaction_payment_repository=FakePaymentRepository(),
+            contact_repository=self.contact_repository,
+            product_repository=FakeProductRepository(self.products),
+            product_unit_repository=FakeProductUnitRepository(self.product_units),
+            unit_of_work=FakeUnitOfWork(),
+            activity_service=self.activity_service,
+            sale_return_repository=FakeCreditRepository(),
+            transaction_refund_repository=FakeRefundRepository(),
+        )
+
+        with self.assertRaises(ConflictError):
+            await transaction_service.record_payment(
+                self.farm_id,
+                transaction.id,
+                PaymentCreate(
+                    amount=Decimal("150.00"),
+                    payment_date=date(2026, 10, 10),
+                    payment_method="cash",
+                ),
+            )
 
     async def test_overpayment_is_reported_as_credit_balance(self):
         transaction_id = uuid4()
@@ -880,10 +1000,16 @@ class TransactionServiceTests(unittest.IsolatedAsyncioTestCase):
     async def test_payment_summary_uses_existing_credits_and_refunds(self):
         transaction_id = uuid4()
         item_id = uuid4()
+        customer_id = uuid4()
+        self.contact_repository.contact = SimpleNamespace(
+            id=customer_id,
+            name="Sale customer",
+            contact_roles=[SimpleNamespace(role=ContactRoleEnum.CUSTOMER)],
+        )
         transaction = SimpleNamespace(
             id=transaction_id,
             farm_id=self.farm_id,
-            contact_id=None,
+            contact_id=customer_id,
             reference_number=None,
             transaction_type=TransactionType.SALE,
             status=TransactionStatus.COMPLETED,
@@ -1025,14 +1151,106 @@ class TransactionServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(sale.balance_due, Decimal("1400.00"))
         self.assertEqual(sale.credit_balance, Decimal("0.00"))
 
+    async def test_sale_balance_or_credit_requires_named_customer(self):
+        for payment_amount in (None, Decimal("150.00")):
+            payments = (
+                []
+                if payment_amount is None
+                else [
+                    PaymentCreate(
+                        amount=payment_amount,
+                        payment_date=date(2026, 10, 9),
+                        payment_method="cash",
+                    )
+                ]
+            )
+            sale_data = TransactionCreate(
+                transaction_type=TransactionType.SALE,
+                transaction_date=date(2026, 10, 9),
+                items=[
+                    {
+                        "product_id": self.product_ids[0],
+                        "chicken_type": ChickenType.LAYERS,
+                        "unit_id": self.unit_ids[0],
+                        "quantity": 1,
+                        "unit_price": Decimal("100.00"),
+                    }
+                ],
+                payments=payments,
+            )
+
+            with self.subTest(payment_amount=payment_amount):
+                with self.assertRaises(ConflictError):
+                    await self.service.create_transaction(self.farm_id, sale_data)
+
+    async def test_fully_paid_walk_in_sale_does_not_require_customer(self):
+        sale_data = TransactionCreate(
+            transaction_type=TransactionType.SALE,
+            transaction_date=date(2026, 10, 9),
+            items=[
+                {
+                    "product_id": self.product_ids[0],
+                    "chicken_type": ChickenType.LAYERS,
+                    "unit_id": self.unit_ids[0],
+                    "quantity": 1,
+                    "unit_price": Decimal("100.00"),
+                }
+            ],
+            payments=[
+                PaymentCreate(
+                    amount=Decimal("100.00"),
+                    payment_date=date(2026, 10, 9),
+                    payment_method="cash",
+                )
+            ],
+        )
+
+        sale = await self.service.create_transaction(self.farm_id, sale_data)
+
+        self.assertIsNone(sale.contact_id)
+        self.assertEqual(sale.balance_due, Decimal("0.00"))
+        self.assertEqual(sale.credit_balance, Decimal("0.00"))
+
+    async def test_sale_balance_rejects_customer_without_name(self):
+        customer_id = uuid4()
+        self.contact_repository.contact = SimpleNamespace(
+            id=customer_id,
+            name=" ",
+            contact_roles=[SimpleNamespace(role=ContactRoleEnum.CUSTOMER)],
+        )
+        sale_data = TransactionCreate(
+            transaction_type=TransactionType.SALE,
+            transaction_date=date(2026, 10, 9),
+            contact_id=customer_id,
+            items=[
+                {
+                    "product_id": self.product_ids[0],
+                    "chicken_type": ChickenType.LAYERS,
+                    "unit_id": self.unit_ids[0],
+                    "quantity": 1,
+                    "unit_price": Decimal("100.00"),
+                }
+            ],
+        )
+
+        with self.assertRaisesRegex(ConflictError, "customer with a name"):
+            await self.service.create_transaction(self.farm_id, sale_data)
+
     async def test_delivery_tracked_egg_sale_defers_inventory_movement(self):
         product = self.products[self.product_ids[0]]
         product.product_type = ProductType.EGGS
         inventory_service = FakeInventoryService()
         self.service.inventory_service = cast(Any, inventory_service)
+        customer_id = uuid4()
+        self.contact_repository.contact = SimpleNamespace(
+            id=customer_id,
+            name="Farm customer",
+            contact_roles=[SimpleNamespace(role=ContactRoleEnum.CUSTOMER)],
+        )
         sale_data = TransactionCreate(
             transaction_type=TransactionType.SALE,
             transaction_date=date(2026, 10, 9),
+            contact_id=customer_id,
             fulfillment_required=True,
             items=[
                 {

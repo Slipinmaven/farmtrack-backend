@@ -9,6 +9,7 @@ from app.models.inventory_movement import InventoryMovement
 from app.models.products import Product
 from app.models.product_units import ProductUnit
 from app.models.units import Unit
+from app.schemas.enums import InventoryMovementType
 
 
 class InventoryMovementRepository:
@@ -25,6 +26,27 @@ class InventoryMovementRepository:
             )
         )
         return Decimal(result.scalar_one())
+
+    async def get_totals_by_type(
+        self,
+        farm_id: UUID,
+        movement_type: InventoryMovementType,
+    ) -> dict[UUID, Decimal]:
+        result = await self.session.execute(
+            select(
+                InventoryMovement.product_id,
+                func.coalesce(func.sum(InventoryMovement.quantity_delta), 0),
+            )
+            .where(
+                InventoryMovement.farm_id == farm_id,
+                InventoryMovement.movement_type == movement_type,
+            )
+            .group_by(InventoryMovement.product_id)
+        )
+        return {
+            product_id: Decimal(quantity)
+            for product_id, quantity in result.all()
+        }
 
     async def has_opening_balance(self, farm_id: UUID, product_id: UUID) -> bool:
         result = await self.session.execute(

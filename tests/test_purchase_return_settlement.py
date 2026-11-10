@@ -292,11 +292,13 @@ class PurchaseReturnSettlementTests(unittest.IsolatedAsyncioTestCase):
         ]
         self.layers_batch = SimpleNamespace(
             id=self.layers_batch_id, farm_id=self.farm_id,
+            product_id=self.product_id,
             status=ChickenBatchStatus.ACTIVE, chicken_type=ChickenType.LAYERS,
             name="Layers",
         )
         self.broiler_batch = SimpleNamespace(
             id=self.broiler_batch_id, farm_id=self.farm_id,
+            product_id=self.product_id,
             status=ChickenBatchStatus.ACTIVE, chicken_type=ChickenType.BROILER,
             name="Broilers",
         )
@@ -462,6 +464,23 @@ class PurchaseReturnSettlementTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result.credit_balance, Decimal("400.00"))
         self.assertEqual(result.return_credit_remaining, Decimal("400.00"))
+
+    async def test_purchase_return_rejects_batch_linked_to_another_product(self):
+        self.layers_batch.product_id = uuid4()
+
+        with self.assertRaisesRegex(ConflictError, "not linked to the selected"):
+            await self.return_service.create_return(
+                self.farm_id,
+                self.transaction_id,
+                self._return_request(10, [(self.blocks[0].id, 10)]),
+            )
+
+        self.assertEqual(self.return_repository.returns, [])
+        self.assertEqual(
+            self.inventory[(self.layers_batch_id, self.blocks[0].id)].quantity,
+            100,
+        )
+        self.assertEqual(self.inventory_service.movements, [])
 
     async def test_non_chicken_purchase_return_updates_shared_inventory(self):
         self.return_service.product_repository.product.product_type = ProductType.FEED

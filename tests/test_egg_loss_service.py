@@ -12,7 +12,13 @@ from app.schemas.egg_loss import (
     EggLossBatchCreateRequest,
     EggLossCreateRequest,
 )
-from app.schemas.enums import ActivityEntityType, ActivityType, EggLossReason, ProductType
+from app.schemas.enums import (
+    ActivityEntityType,
+    ActivityType,
+    EggLossReason,
+    InventoryMovementType,
+    ProductType,
+)
 from app.services.egg_loss_service import EggLossService
 
 
@@ -105,6 +111,14 @@ class FakeSoldQuantityRepository:
         return self.totals.get((farm_id, product_id), Decimal("0.000"))
 
 
+class FakeInventoryMovementRepository:
+    def __init__(self):
+        self.totals = {}
+
+    async def get_totals_by_type(self, farm_id, movement_type):
+        return self.totals.get(movement_type, {})
+
+
 class FakeActivityService:
     def __init__(self):
         self.events = []
@@ -150,6 +164,7 @@ class EggLossServiceTests(unittest.IsolatedAsyncioTestCase):
         self.activity_service = FakeActivityService()
         self.unit_of_work = FakeUnitOfWork()
         self.sold_quantity_repository = FakeSoldQuantityRepository()
+        self.inventory_movement_repository = FakeInventoryMovementRepository()
         self.service = EggLossService(
             loss_repository=cast(Any, self.loss_repository),
             collection_repository=cast(Any, self.collection_repository),
@@ -166,6 +181,10 @@ class EggLossServiceTests(unittest.IsolatedAsyncioTestCase):
             transaction_item_repository=cast(
                 Any,
                 self.sold_quantity_repository,
+            ),
+            inventory_movement_repository=cast(
+                Any,
+                self.inventory_movement_repository,
             ),
             unit_of_work=cast(Any, self.unit_of_work),
             activity_service=cast(Any, self.activity_service),
@@ -225,6 +244,17 @@ class EggLossServiceTests(unittest.IsolatedAsyncioTestCase):
         self.sold_quantity_repository.totals[(self.farm_id, self.product_id)] = (
             Decimal("30.000")
         )
+
+        with self.assertRaises(ConflictError):
+            await self.service.create_loss(self.farm, self._request(quantity="2"))
+
+        self.assertEqual(self.loss_repository.created, [])
+        self.assertEqual(self.activity_service.events, [])
+
+    async def test_cannot_write_off_eggs_already_issued_in_settlement(self):
+        self.inventory_movement_repository.totals[
+            InventoryMovementType.SETTLEMENT_ISSUED
+        ] = {self.product_id: Decimal("-35.000")}
 
         with self.assertRaises(ConflictError):
             await self.service.create_loss(self.farm, self._request(quantity="2"))

@@ -34,6 +34,9 @@ class FakeProductRepository:
             return None
         return product
 
+    async def get_by_id_for_update(self, farm_id, product_id):
+        return await self.get_by_id(farm_id, product_id)
+
 
 class FakeProductUnitRepository:
     def __init__(self, product_units):

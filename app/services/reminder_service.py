@@ -10,7 +10,11 @@ from app.repositories.farm_settings_repository import FarmSettingsRepository
 from app.repositories.notification_outbox_repository import NotificationOutboxRepository
 from app.repositories.reminder_repository import ReminderRepository
 from app.schemas.enums import ReminderStatus
-from app.schemas.reminder import ReminderCreateRequest, ReminderResponse
+from app.schemas.reminder import (
+    ReminderCreateRequest,
+    ReminderResponse,
+    ReminderRescheduleRequest,
+)
 
 
 def _normalize_due_at(due_at: datetime, timezone_name: str | None) -> datetime:
@@ -132,6 +136,61 @@ class ReminderService:
             reminder.status = status.value
             if status == ReminderStatus.COMPLETED:
                 reminder.completed_at = datetime.now(timezone.utc)
+            await self.unit_of_work.flush()
+            await self.unit_of_work.commit()
+            return ReminderResponse.model_validate(reminder, from_attributes=True)
+
+    async def reschedule(
+        self,
+        farm: Farm,
+        reminder_id: UUID,
+        request: ReminderRescheduleRequest,
+    ) -> ReminderResponse:
+        async with self.unit_of_work:
+            reminder = await self.repository.get_by_id_for_farm(
+                farm.id,
+                reminder_id,
+                for_update=True,
+            )
+            if reminder is None:
+                raise ResourceNotFoundError("Reminder not found.")
+            if reminder.status != ReminderStatus.PENDING.value:
+                raise ConflictError("Only pending reminders can be rescheduled.")
+            farm_settings = await self.farm_settings_repository.get_farm_settings(
+                farm.id
+            )
+            due_at = _normalize_due_at(
+                request.due_at,
+                farm_settings.timezone if farm_settings else None,
+            )
+            if due_at <= datetime.now(UTC):
+                raise ConflictError("Reminder due time must be in the future.")
+
+            reminder.due_at = due_at
+            reminder.notification_enqueued_at = None
+            await self.unit_of_work.flush()
+            await self.unit_of_work.commit()
+            return ReminderResponse.model_validate(reminder, from_attributes=True)
+
+    async def reopen(
+        self,
+        farm: Farm,
+        reminder_id: UUID,
+    ) -> ReminderResponse:
+        async with self.unit_of_work:
+            reminder = await self.repository.get_by_id_for_farm(
+                farm.id,
+                reminder_id,
+                for_update=True,
+            )
+            if reminder is None:
+                raise ResourceNotFoundError("Reminder not found.")
+            if reminder.status != ReminderStatus.COMPLETED.value:
+                raise ConflictError("Only completed reminders can be reopened.")
+
+            reminder.status = ReminderStatus.PENDING.value
+            reminder.completed_at = None
+            reminder.notification_enqueued_at = None
             await self.unit_of_work.flush()
             await self.unit_of_work.commit()
             return ReminderResponse.model_validate(reminder, from_attributes=True)

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends
 
 from app.dependencies.auth import get_current_user
-from app.dependencies.services import get_security_settings_service
+from app.presentation.dependencies.services import get_security_settings_service
 from app.models.user import User
 from app.schemas.security_settings import (
     SecuritySettingsResponse,

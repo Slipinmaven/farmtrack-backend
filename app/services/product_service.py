@@ -65,8 +65,22 @@ class ProductService:
         product_data: ProductUpdateRequest,
     ) -> ProductResponse:
         async with self.unit_of_work:
-            product = await self._get_or_raise(farm.id, product_id)
+            product = await self.repository.get_by_id_for_update_with_units(
+                farm.id,
+                product_id,
+            )
+            if product is None:
+                raise ResourceNotFoundError("Product not found.")
             update_data = product_data.model_dump(exclude_unset=True, exclude={"product_units"})
+            if (
+                "product_type" in update_data
+                and update_data["product_type"] != product.product_type
+                and await self.repository.has_product_history(product.id)
+            ):
+                raise ConflictError(
+                    "A product type cannot be changed after it has been used in "
+                    "inventory, transactions, or related stock records."
+                )
             unit_definitions = None
             if "product_units" in product_data.model_fields_set:
                 definitions = [unit.model_dump() for unit in product_data.product_units or []]

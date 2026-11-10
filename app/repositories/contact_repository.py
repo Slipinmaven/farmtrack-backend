@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from sqlalchemy import delete, or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -61,6 +61,48 @@ class ContactRepository:
         self.session.add(contact)
         await self.session.flush()
         return contact
+
+    async def phone_is_in_use(
+        self,
+        farm_id: UUID,
+        phone_normalized: str,
+        exclude_contact_id: UUID | None = None,
+    ) -> bool:
+        query = select(Contact.id).where(
+            Contact.farm_id == farm_id,
+            or_(
+                Contact.phone_normalized == phone_normalized,
+                func.regexp_replace(
+                    Contact.phone,
+                    r"[^0-9]",
+                    "",
+                    "g",
+                )
+                == phone_normalized,
+            ),
+        )
+        if exclude_contact_id is not None:
+            query = query.where(Contact.id != exclude_contact_id)
+        result = await self.session.execute(query.limit(1))
+        return result.scalar_one_or_none() is not None
+
+    async def email_is_in_use(
+        self,
+        farm_id: UUID,
+        email_normalized: str,
+        exclude_contact_id: UUID | None = None,
+    ) -> bool:
+        query = select(Contact.id).where(
+            Contact.farm_id == farm_id,
+            or_(
+                Contact.email_normalized == email_normalized,
+                func.lower(func.trim(Contact.email)) == email_normalized,
+            ),
+        )
+        if exclude_contact_id is not None:
+            query = query.where(Contact.id != exclude_contact_id)
+        result = await self.session.execute(query.limit(1))
+        return result.scalar_one_or_none() is not None
 
     async def update(self, contact: Contact) -> Contact:
         await self.session.flush()

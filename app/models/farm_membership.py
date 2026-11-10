@@ -33,6 +33,11 @@ class FarmMembership(Base):
             "status IN ('invited', 'active', 'revoked')",
             name="check_farm_memberships_status",
         ),
+        CheckConstraint(
+            "invitation_email_status IN "
+            "('not_configured', 'queued', 'sent', 'failed', 'cancelled')",
+            name="check_farm_memberships_invitation_email_status",
+        ),
         Index("ix_farm_memberships_user_status", "user_id", "status"),
     )
 
@@ -69,6 +74,16 @@ class FarmMembership(Base):
         nullable=True,
     )
     revoked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True),
+        nullable=True,
+    )
+    invitation_email_status: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="not_configured",
+        server_default="not_configured",
+    )
+    invitation_email_sent_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
     )

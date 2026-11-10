@@ -3,7 +3,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, status
 
 from app.dependencies.farm import get_owned_farm
-from app.dependencies.services import get_egg_sale_service
+from app.presentation.dependencies.services import get_egg_sale_service
 from app.models.farm import Farm
 from app.schemas.egg_sale import EggSaleCreateRequest
 from app.schemas.transaction import TransactionResponse

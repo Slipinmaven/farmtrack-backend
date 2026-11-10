@@ -4,8 +4,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
-from sqlalchemy import func
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -16,10 +15,10 @@ from app.models.batch_blocks import BatchBlock
 from app.models.chicken_batches import ChickenBatch
 from app.models.chicken_losses import ChickenLoss
 from app.models.egg_losses import EggLoss
+from app.models.egg_production_cost_confirmations import EggProductionCostConfirmation
 from app.models.expense_payment import ExpensePayment
 from app.models.expenses import Expense
 from app.models.inventory_movement import InventoryMovement
-from app.models.product_units import ProductUnit
 from app.models.product_consumptions import ProductConsumption
 from app.models.products import Product
 from app.models.product_units import ProductUnit
@@ -33,17 +32,23 @@ from app.models.sale_returns import SaleReturn
 from app.models.transaction_refunds import TransactionRefund
 from app.models.transactions import Transaction
 from app.models.transaction_items import TransactionItem
+from app.models.units import Unit
 from app.schemas.enums import (
     ActivityEntityType,
     ActivityType,
     InventoryMovementType,
     ProductType,
+    SaleReturnType,
     TransactionStatus,
     TransactionType,
 )
 from app.schemas.profitability_report import (
+    EggProductionCostConfirmationResponse,
+    EggStockReconciliationResponse,
+    ProfitabilityProductResponse,
     ProfitabilityReportResponse,
     ProfitabilityStockResponse,
+    ReservedEggSaleResponse,
     ProfitabilityStockValuationRequest,
     ProfitabilityStockValuationResponse,
 )
@@ -55,6 +60,31 @@ CENT = Decimal("0.01")
 
 def _money(value: Decimal) -> Decimal:
     return value.quantize(CENT, rounding=ROUND_HALF_UP)
+
+
+def _product_margin_values(
+    quantity_sold: Decimal,
+    sales_value: Decimal,
+    sales_credits: Decimal,
+    cost_of_goods_sold: Decimal,
+    uncosted_quantity: Decimal,
+) -> tuple[Decimal, Decimal | None, Decimal | None, Decimal | None]:
+    net_sales = sales_value - sales_credits
+    cost_complete = uncosted_quantity == ZERO
+    return (
+        _money(net_sales),
+        _money(sales_value / quantity_sold) if quantity_sold > ZERO else None,
+        (
+            _money(cost_of_goods_sold / quantity_sold)
+            if quantity_sold > ZERO and cost_complete
+            else None
+        ),
+        (
+            _money(net_sales - cost_of_goods_sold)
+            if cost_complete
+            else None
+        ),
+    )
 
 
 def _enum_value(value: Any) -> str:
@@ -119,6 +149,7 @@ def _replay_inventory(
     egg_collection_costs: dict[UUID, Decimal | None] | None = None,
     sale_delivery_items: dict[UUID, UUID] | None = None,
     sale_return_items: dict[UUID, UUID] | None = None,
+    valuation_quantities: dict[UUID, Decimal] | None = None,
 ) -> tuple[dict[UUID, Decimal | None], dict[UUID, dict[str, Decimal]]]:
     """Replay the farm ledger without assigning a value to an uncosted quantity."""
     egg_collection_costs = egg_collection_costs or {}
@@ -134,7 +165,26 @@ def _replay_inventory(
     sale_item_quantities: dict[UUID, Decimal] = defaultdict(lambda: ZERO)
     unknown_sale_items: set[UUID] = set()
 
-    for movement in movements:
+    estimated_valuation_keys = {
+        (movement.product_id, movement.occurred_on)
+        for movement in movements
+        if movement.source_type == "estimated_stock_valuation"
+    }
+
+    def movement_order(movement: InventoryMovement) -> tuple[Any, ...]:
+        if (movement.product_id, movement.occurred_on) not in estimated_valuation_keys:
+            return (movement.occurred_on, 0, movement.created_at, movement.id)
+        if movement.source_type == "estimated_stock_valuation":
+            priority = 1
+        elif Decimal(movement.quantity_delta) > ZERO:
+            priority = 0
+        elif Decimal(movement.quantity_delta) < ZERO:
+            priority = 2
+        else:
+            priority = 3
+        return (movement.occurred_on, priority, movement.created_at, movement.id)
+
+    for movement in sorted(movements, key=movement_order):
         product_id = movement.product_id
         delta = Decimal(movement.quantity_delta)
         unit_cost = movement.unit_cost
@@ -148,6 +198,8 @@ def _replay_inventory(
             unknown_quantities[product_id] = ZERO
             known_quantities[product_id] += unvalued
             known_values[product_id] += unvalued * Decimal(unit_cost)
+            if valuation_quantities is not None:
+                valuation_quantities[movement.id] = unvalued
             effective_costs[movement.id] = None
             continue
         if (
@@ -269,6 +321,38 @@ def _replay_inventory(
     return effective_costs, stock
 
 
+def _egg_sale_quantity_deducted_as_of(
+    quantity: Decimal,
+    conversion_factor: Decimal,
+    fulfillment_required: bool,
+    delivered_quantity: Decimal,
+) -> Decimal:
+    if fulfillment_required:
+        return delivered_quantity
+    return quantity * conversion_factor
+
+
+def _requires_direct_sale_inventory_movement(
+    product_type: str,
+    fulfillment_required: bool,
+) -> bool:
+    return not (
+        product_type == ProductType.EGGS.value
+        and fulfillment_required
+    )
+
+
+def _reserved_egg_quantity(
+    ordered_quantity: Decimal,
+    delivered_quantity: Decimal,
+    cancelled_quantity: Decimal = ZERO,
+) -> Decimal:
+    return max(
+        ZERO,
+        ordered_quantity - delivered_quantity - cancelled_quantity,
+    )
+
+
 class ProfitabilityReportService:
     def __init__(
         self,
@@ -279,6 +363,88 @@ class ProfitabilityReportService:
         self.session = session
         self.unit_of_work = unit_of_work
         self.activity_service = activity_service
+
+    async def confirm_zero_egg_production_cost(
+        self,
+        farm_id: UUID,
+        *,
+        user_id: UUID,
+        from_date: date,
+        to_date: date,
+    ) -> EggProductionCostConfirmationResponse:
+        if from_date > to_date:
+            raise ConflictError(
+                "Report start date must be on or before its end date."
+            )
+
+        async with self.unit_of_work:
+            collections_exist = (
+                await self.session.execute(
+                    select(EggCollection.id)
+                    .join(Product, Product.id == EggCollection.product_id)
+                    .where(
+                        EggCollection.farm_id == farm_id,
+                        EggCollection.entry_type == "collection",
+                        EggCollection.collected_at >= datetime.combine(
+                            from_date, datetime.min.time()
+                        ),
+                        EggCollection.collected_at
+                        <= datetime.combine(to_date, datetime.max.time()),
+                        Product.product_type == ProductType.EGGS,
+                    )
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if collections_exist is None:
+                raise ConflictError(
+                    "No egg production was recorded in this report period."
+                )
+
+            consumption_exists = (
+                await self.session.execute(
+                    select(ProductConsumption.id)
+                    .where(
+                        ProductConsumption.farm_id == farm_id,
+                        ProductConsumption.consumption_date >= from_date,
+                        ProductConsumption.consumption_date <= to_date,
+                    )
+                    .limit(1)
+                )
+            ).scalar_one_or_none()
+            if consumption_exists is not None:
+                raise ConflictError(
+                    "Product use is recorded in this period. Review its cost instead "
+                    "of confirming zero production cost."
+                )
+
+            confirmation = (
+                await self.session.execute(
+                    select(EggProductionCostConfirmation).where(
+                        EggProductionCostConfirmation.farm_id == farm_id,
+                        EggProductionCostConfirmation.from_date == from_date,
+                        EggProductionCostConfirmation.to_date == to_date,
+                    )
+                )
+            ).scalar_one_or_none()
+            if confirmation is None:
+                confirmation = EggProductionCostConfirmation(
+                    farm_id=farm_id,
+                    confirmed_by=user_id,
+                    from_date=from_date,
+                    to_date=to_date,
+                )
+                self.session.add(confirmation)
+            else:
+                confirmation.confirmed_by = user_id
+                confirmation.confirmed_at = datetime.now(timezone.utc)
+
+            await self.unit_of_work.commit()
+
+        return EggProductionCostConfirmationResponse(
+            confirmed=True,
+            from_date=from_date,
+            to_date=to_date,
+        )
 
     async def _egg_stock_as_of(
         self,
@@ -329,19 +495,33 @@ class ProfitabilityReportService:
                 .group_by(EggLoss.product_id)
             )
         ).all()
+        delivered_quantities = (
+            select(
+                SaleDeliveryItem.transaction_item_id.label("transaction_item_id"),
+                func.sum(SaleDeliveryItem.quantity).label("quantity"),
+            )
+            .join(
+                SaleDelivery,
+                SaleDelivery.id == SaleDeliveryItem.sale_delivery_id,
+            )
+            .where(SaleDelivery.delivered_date <= as_of)
+            .group_by(SaleDeliveryItem.transaction_item_id)
+            .subquery()
+        )
         sale_rows = (
             await self.session.execute(
                 select(
                     TransactionItem.product_id,
-                    func.coalesce(
-                        func.sum(
-                            TransactionItem.quantity
-                            * TransactionItem.conversion_factor
-                        ),
-                        0,
-                    ),
+                    TransactionItem.quantity,
+                    TransactionItem.conversion_factor,
+                    Transaction.fulfillment_required,
+                    func.coalesce(delivered_quantities.c.quantity, 0),
                 )
                 .join(Transaction, Transaction.id == TransactionItem.transaction_id)
+                .outerjoin(
+                    delivered_quantities,
+                    delivered_quantities.c.transaction_item_id == TransactionItem.id,
+                )
                 .where(
                     Transaction.farm_id == farm_id,
                     Transaction.transaction_type == TransactionType.SALE,
@@ -349,7 +529,6 @@ class ProfitabilityReportService:
                     Transaction.transaction_date <= as_of,
                     TransactionItem.product_id.in_(product_ids),
                 )
-                .group_by(TransactionItem.product_id)
             )
         ).all()
         return_rows = (
@@ -384,7 +563,20 @@ class ProfitabilityReportService:
         ).all()
         collected = {product_id: Decimal(value) for product_id, value in collected_rows}
         losses = {product_id: Decimal(value) for product_id, value in loss_rows}
-        sold = {product_id: Decimal(value) for product_id, value in sale_rows}
+        sold: defaultdict[UUID, Decimal] = defaultdict(lambda: ZERO)
+        for (
+            product_id,
+            quantity,
+            conversion_factor,
+            fulfillment_required,
+            delivered_quantity,
+        ) in sale_rows:
+            sold[product_id] += _egg_sale_quantity_deducted_as_of(
+                Decimal(quantity),
+                Decimal(conversion_factor),
+                fulfillment_required,
+                Decimal(delivered_quantity),
+            )
         returned = {product_id: Decimal(value) for product_id, value in return_rows}
         return {
             product_id: egg_available_quantity(
@@ -436,6 +628,16 @@ class ProfitabilityReportService:
                 raise ConflictError(
                     f"Base unit is missing for '{product.name}'. "
                     "Configure the product before recording stock cost."
+                )
+            if request.from_date is not None and request.to_date is not None:
+                return await self._record_historical_stock_estimate(
+                    farm_id=farm_id,
+                    user_id=user_id,
+                    product=product,
+                    base_unit=base_unit,
+                    unit_cost=request.unit_cost,
+                    from_date=request.from_date,
+                    to_date=request.to_date,
                 )
 
             movements = list(
@@ -611,6 +813,148 @@ class ProfitabilityReportService:
                 inventory_movement_id=audit_movement.id,
             )
 
+    async def _record_historical_stock_estimate(
+        self,
+        *,
+        farm_id: UUID,
+        user_id: UUID,
+        product: Product,
+        base_unit: Unit,
+        unit_cost: Decimal,
+        from_date: date,
+        to_date: date,
+    ) -> ProfitabilityStockValuationResponse:
+        if to_date > date.today():
+            raise ConflictError("The report period cannot end in the future.")
+
+        movements = list(
+            (
+                await self.session.execute(
+                    select(InventoryMovement)
+                    .where(
+                        InventoryMovement.farm_id == farm_id,
+                        InventoryMovement.product_id == product.id,
+                        InventoryMovement.occurred_on <= to_date,
+                    )
+                    .order_by(
+                        InventoryMovement.occurred_on,
+                        InventoryMovement.created_at,
+                        InventoryMovement.id,
+                    )
+                    .with_for_update()
+                )
+            ).scalars().all()
+        )
+        current_costs, _ = _replay_inventory(movements)
+        target_movements = [
+            movement
+            for movement in movements
+            if _enum_value(movement.movement_type)
+            in {
+                InventoryMovementType.SALE.value,
+                InventoryMovementType.CONSUMPTION.value,
+                InventoryMovementType.LOSS.value,
+            }
+            and movement.quantity_delta < ZERO
+            and from_date <= movement.occurred_on <= to_date
+            and current_costs.get(movement.id) is None
+        ]
+        if not target_movements:
+            raise ConflictError(
+                f"No uncosted inventory movement for '{product.name}' can be fixed "
+                "with an estimated stock cost in this report period."
+            )
+
+        candidate_dates = sorted(
+            {movement.occurred_on for movement in target_movements} | {to_date}
+        )
+        estimates = [
+            InventoryMovement(
+                id=uuid4(),
+                farm_id=farm_id,
+                user_id=user_id,
+                product_id=product.id,
+                unit_id=base_unit.id,
+                quantity_delta=ZERO,
+                movement_type=InventoryMovementType.VALUATION,
+                source_type="estimated_stock_valuation",
+                source_id=uuid4(),
+                source_item_id=product.id,
+                unit_cost=unit_cost,
+                occurred_on=valuation_date,
+                notes="User-entered estimated cost for historical stock activity",
+            )
+            for valuation_date in candidate_dates
+        ]
+        valuation_quantities: dict[UUID, Decimal] = {}
+        estimated_costs, _ = _replay_inventory(
+            [*movements, *estimates],
+            valuation_quantities=valuation_quantities,
+        )
+        resolved_movements = [
+            movement
+            for movement in target_movements
+            if estimated_costs.get(movement.id) is not None
+        ]
+        if not resolved_movements:
+            raise ConflictError(
+                f"No uncosted stock quantity for '{product.name}' is available "
+                "to estimate before its sales in this period."
+            )
+
+        resolved_dates = {movement.occurred_on for movement in resolved_movements}
+        applied_estimates = [
+            estimate
+            for estimate in estimates
+            if (
+                estimate.occurred_on in resolved_dates
+                or estimate.occurred_on == to_date
+            )
+            and valuation_quantities.get(estimate.id, ZERO) > ZERO
+        ]
+        if not applied_estimates:
+            raise ConflictError(
+                f"No uncosted stock quantity for '{product.name}' was valued."
+            )
+
+        self.session.add_all(applied_estimates)
+        await self.session.flush()
+        await self.activity_service.record(
+            farm_id=farm_id,
+            user_id=user_id,
+            activity_type=ActivityType.INVENTORY_ADJUSTED,
+            entity_type=ActivityEntityType.INVENTORY_MOVEMENT,
+            entity_id=applied_estimates[0].id,
+            details={
+                "product_id": str(product.id),
+                "product_name": product.name,
+                "unit_cost": str(unit_cost),
+                "estimated": True,
+                "from_date": from_date.isoformat(),
+                "to_date": to_date.isoformat(),
+                "valuation_dates": [
+                    movement.occurred_on.isoformat()
+                    for movement in applied_estimates
+                ],
+            },
+        )
+        await self.unit_of_work.commit()
+        return ProfitabilityStockValuationResponse(
+            product_id=product.id,
+            product_name=product.name,
+            unit_name=base_unit.name,
+            unit_abbreviation=base_unit.abbreviation,
+            valuation_date=min(
+                movement.occurred_on for movement in applied_estimates
+            ),
+            quantity_valued=sum(
+                (valuation_quantities[movement.id] for movement in applied_estimates),
+                ZERO,
+            ),
+            unit_cost=unit_cost,
+            inventory_movement_id=applied_estimates[0].id,
+        )
+
     async def build_report(
         self,
         farm_id: UUID,
@@ -632,6 +976,41 @@ class ProfitabilityReportService:
             ).scalars().all()
         )
         product_by_id = {product.id: product for product in products}
+        product_performance: dict[UUID, dict[str, Any]] = {}
+
+        def performance_for(product_id: UUID) -> dict[str, Any] | None:
+            product = product_by_id.get(product_id)
+            if product is None:
+                return None
+            if product_id not in product_performance:
+                base_unit = next(
+                    (
+                        product_unit.unit
+                        for product_unit in product.product_units
+                        if product_unit.is_base_unit
+                    ),
+                    None,
+                )
+                if base_unit is None:
+                    raise ConflictError(
+                        f"Base unit is missing for inventory product '{product.name}'. "
+                        "Configure a base unit before generating profitability reports."
+                    )
+                product_performance[product_id] = {
+                    "product_id": product_id,
+                    "product_name": product.name,
+                    "product_type": _enum_value(product.product_type),
+                    "unit_name": base_unit.name,
+                    "unit_abbreviation": base_unit.abbreviation,
+                    "quantity_sold": ZERO,
+                    "sales_value": ZERO,
+                    "sales_credits": ZERO,
+                    "cost_of_goods_sold": ZERO,
+                    "uncosted_quantity": ZERO,
+                    "uncosted_movement_quantity": ZERO,
+                    "uncosted_movement_types": set(),
+                }
+            return product_performance[product_id]
 
         transactions = list(
             (
@@ -645,6 +1024,9 @@ class ProfitabilityReportService:
                 )
             ).scalars().all()
         )
+        transaction_item_by_id = {
+            item.id: item for transaction in transactions for item in transaction.items
+        }
         movements = list(
             (
                 await self.session.execute(
@@ -674,6 +1056,15 @@ class ProfitabilityReportService:
                 )
             ).all()
         )
+        delivered_quantity_by_item: dict[UUID, Decimal] = {}
+        for delivery_item, _ in all_deliveries:
+            delivered_quantity_by_item[delivery_item.transaction_item_id] = (
+                delivered_quantity_by_item.get(
+                    delivery_item.transaction_item_id,
+                    ZERO,
+                )
+                + Decimal(delivery_item.quantity)
+            )
         sale_delivery_item_to_transaction_item = {
             delivery_item.id: delivery_item.transaction_item_id
             for delivery_item, _ in all_deliveries
@@ -681,15 +1072,76 @@ class ProfitabilityReportService:
         sale_return_item_rows = list(
             (
                 await self.session.execute(
-                    select(SaleReturnItem)
+                    select(SaleReturnItem, SaleReturn.return_type)
                     .join(SaleReturn, SaleReturn.id == SaleReturnItem.sale_return_id)
                     .join(Transaction, Transaction.id == SaleReturn.transaction_id)
                     .where(Transaction.farm_id == farm_id, SaleReturn.return_date <= to_date)
                 )
-            ).scalars().all()
+            ).all()
+        )
+        cancelled_quantity_by_item: dict[UUID, Decimal] = {}
+        for return_item, return_type in sale_return_item_rows:
+            if return_type != SaleReturnType.UNDELIVERED_CANCELLED.value:
+                continue
+            cancelled_quantity_by_item[return_item.transaction_item_id] = (
+                cancelled_quantity_by_item.get(return_item.transaction_item_id, ZERO)
+                + Decimal(return_item.quantity)
+            )
+        reserved_egg_sales = []
+        for transaction in transactions:
+            if (
+                _enum_value(transaction.transaction_type) != "sale"
+                or _enum_value(transaction.status) != "completed"
+                or not transaction.fulfillment_required
+            ):
+                continue
+            for item in transaction.items:
+                product = product_by_id.get(item.product_id)
+                if (
+                    product is None
+                    or _enum_value(product.product_type) != ProductType.EGGS.value
+                ):
+                    continue
+                ordered_quantity = Decimal(item.quantity) * Decimal(
+                    item.conversion_factor
+                )
+                reserved_quantity = _reserved_egg_quantity(
+                    ordered_quantity,
+                    delivered_quantity_by_item.get(item.id, ZERO),
+                    cancelled_quantity_by_item.get(item.id, ZERO),
+                )
+                if reserved_quantity <= ZERO:
+                    continue
+                base_unit = next(
+                    (
+                        product_unit.unit
+                        for product_unit in product.product_units
+                        if product_unit.is_base_unit
+                    ),
+                    None,
+                )
+                reserved_egg_sales.append(
+                    ReservedEggSaleResponse(
+                        transaction_id=transaction.id,
+                        reference_number=transaction.reference_number,
+                        transaction_date=transaction.transaction_date,
+                        product_id=product.id,
+                        product_name=product.name,
+                        unit_abbreviation=(
+                            base_unit.abbreviation if base_unit is not None else "units"
+                        ),
+                        reserved_quantity=reserved_quantity,
+                    )
+                )
+        reserved_egg_sales.sort(
+            key=lambda item: (
+                item.transaction_date,
+                item.product_name.casefold(),
+                str(item.transaction_id),
+            )
         )
         sale_return_item_to_transaction_item = {
-            row.id: row.transaction_item_id for row in sale_return_item_rows
+            row.id: row.transaction_item_id for row, _ in sale_return_item_rows
         }
         consumption_rows = list(
             (
@@ -716,6 +1168,26 @@ class ProfitabilityReportService:
                 )
             ).scalars().all()
         )
+        has_egg_production = any(
+            collection.entry_type == "collection"
+            and (product := product_by_id.get(collection.product_id)) is not None
+            and _enum_value(product.product_type) == ProductType.EGGS.value
+            for collection in collection_rows
+        )
+        zero_egg_cost_confirmation = None
+        if has_egg_production and not consumption_rows:
+            zero_egg_cost_confirmation = (
+                await self.session.execute(
+                    select(EggProductionCostConfirmation.id).where(
+                        EggProductionCostConfirmation.farm_id == farm_id,
+                        EggProductionCostConfirmation.from_date == from_date,
+                        EggProductionCostConfirmation.to_date == to_date,
+                    )
+                )
+            ).scalar_one_or_none()
+        egg_production_zero_cost_confirmed = (
+            zero_egg_cost_confirmation is not None
+        )
 
         consumption_by_id = {row.id: row for row in consumption_rows}
         consumption_movement_by_id = {
@@ -732,9 +1204,11 @@ class ProfitabilityReportService:
             sale_return_items=sale_return_item_to_transaction_item,
         )
         consumption_cost_by_id: dict[UUID, Decimal | None] = {}
+        missing_inventory_record_count = 0
         for consumption_id, consumption in consumption_by_id.items():
             movement = consumption_movement_by_id.get(consumption_id)
             if movement is None:
+                missing_inventory_record_count += 1
                 consumption_cost_by_id[consumption_id] = None
                 continue
             unit_cost = preliminary_costs.get(movement.id)
@@ -787,6 +1261,9 @@ class ProfitabilityReportService:
                 continue
             product = product_by_id.get(collection.product_id)
             if product is None or _enum_value(product.product_type) != "eggs":
+                continue
+            if egg_production_zero_cost_confirmed:
+                collection_costs[collection.id] = ZERO
                 continue
             block_id = collection.block_id
             block_output = egg_outputs_by_block[block_id]
@@ -862,15 +1339,26 @@ class ProfitabilityReportService:
                     delivered_quantity = delivered_by_item.get(item.id, ZERO)
                     denominator = Decimal(item.quantity) * Decimal(item.conversion_factor)
                     if denominator and delivered_quantity:
-                        gross_sales += (
+                        item_sales = (
                             Decimal(item.total_amount) * delivered_quantity / denominator
                         )
+                        gross_sales += item_sales
+                        row = performance_for(item.product_id)
+                        if row is not None:
+                            row["quantity_sold"] += delivered_quantity
+                            row["sales_value"] += item_sales
                 elif _period_contains(
                     transaction.transaction_date,
                     from_date,
                     to_date,
                 ):
                     gross_sales += Decimal(item.total_amount)
+                    row = performance_for(item.product_id)
+                    if row is not None:
+                        row["quantity_sold"] += (
+                            Decimal(item.quantity) * Decimal(item.conversion_factor)
+                        )
+                        row["sales_value"] += Decimal(item.total_amount)
 
         sale_returns = list(
             (
@@ -891,6 +1379,14 @@ class ProfitabilityReportService:
             (Decimal(item.credit_amount) for _, item in sale_returns),
             ZERO,
         )
+        for _, return_item in sale_returns:
+            transaction_item = transaction_item_by_id.get(
+                return_item.transaction_item_id
+            )
+            if transaction_item is not None:
+                row = performance_for(transaction_item.product_id)
+                if row is not None:
+                    row["sales_credits"] += Decimal(return_item.credit_amount)
 
         cash_refunds = list(
             (
@@ -1019,15 +1515,34 @@ class ProfitabilityReportService:
                 product = product_by_id.get(item.product_id)
                 if product is None or _enum_value(product.product_type) == "chickens":
                     continue
+                if not _requires_direct_sale_inventory_movement(
+                    _enum_value(product.product_type),
+                    transaction.fulfillment_required,
+                ):
+                    continue
                 if _period_contains(transaction.transaction_date, from_date, to_date):
                     if ("transaction", item.id) not in recorded_sale_sources:
                         unvalued_period_movement_count += 1
+                        missing_inventory_record_count += 1
+                        row = performance_for(item.product_id)
+                        if row is not None:
+                            row["uncosted_quantity"] += (
+                                Decimal(item.quantity) * Decimal(item.conversion_factor)
+                            )
         for delivery_item, _ in deliveries:
             if (
                 "sale_delivery",
                 delivery_item.id,
             ) not in recorded_sale_sources:
                 unvalued_period_movement_count += 1
+                missing_inventory_record_count += 1
+                transaction_item = transaction_item_by_id.get(
+                    delivery_item.transaction_item_id
+                )
+                if transaction_item is not None:
+                    row = performance_for(transaction_item.product_id)
+                    if row is not None:
+                        row["uncosted_quantity"] += Decimal(delivery_item.quantity)
         for movement in movements:
             if not _period_contains(_event_date(movement), from_date, to_date):
                 continue
@@ -1036,13 +1551,34 @@ class ProfitabilityReportService:
             if movement_type == "sale" and movement.quantity_delta < ZERO:
                 if cost is None:
                     unvalued_period_movement_count += 1
+                    row = performance_for(movement.product_id)
+                    if row is not None:
+                        row["uncosted_quantity"] += abs(
+                            Decimal(movement.quantity_delta)
+                        )
+                        row["uncosted_movement_quantity"] += abs(
+                            Decimal(movement.quantity_delta)
+                        )
+                        row["uncosted_movement_types"].add("sale")
                 else:
-                    sale_cogs += abs(Decimal(movement.quantity_delta)) * cost
-            elif movement_type == "loss" and movement.quantity_delta < ZERO:
+                    movement_cost = abs(Decimal(movement.quantity_delta)) * cost
+                    sale_cogs += movement_cost
+                    row = performance_for(movement.product_id)
+                    if row is not None:
+                        row["cost_of_goods_sold"] += movement_cost
+            elif movement_type in {"consumption", "loss"} and movement.quantity_delta < ZERO:
                 if cost is None:
                     unvalued_period_movement_count += 1
+                    row = performance_for(movement.product_id)
+                    if row is not None:
+                        row["uncosted_movement_quantity"] += abs(
+                            Decimal(movement.quantity_delta)
+                        )
+                        row["uncosted_movement_types"].add(movement_type)
                 else:
-                    inventory_losses += abs(Decimal(movement.quantity_delta)) * cost
+                    movement_cost = abs(Decimal(movement.quantity_delta)) * cost
+                    if movement_type == "loss":
+                        inventory_losses += movement_cost
         recorded_loss_ids = {
             movement.source_id
             for movement in movements
@@ -1053,6 +1589,7 @@ class ProfitabilityReportService:
             1 for row in chicken_loss_rows + egg_loss_rows if row.id not in recorded_loss_ids
         )
         unvalued_period_movement_count += missing_loss_records
+        missing_inventory_record_count += missing_loss_records
 
         # Consumption costs assigned to egg production become egg inventory cost;
         # the unallocated remainder is recognized as a period expense.
@@ -1064,6 +1601,7 @@ class ProfitabilityReportService:
             unvalued_period_movement_count += unvalued_consumption_records
 
         closing_stock: list[ProfitabilityStockResponse] = []
+        egg_stock_reconciliation: list[EggStockReconciliationResponse] = []
         closing_valued_cost = ZERO
         closing_unvalued_quantity = ZERO
         untracked_egg_quantity = ZERO
@@ -1111,6 +1649,21 @@ class ProfitabilityReportService:
                 raise ConflictError(
                     f"Base unit is missing for inventory product '{product.name}'. "
                     "Configure a base unit before generating profitability reports."
+                )
+            if (
+                _enum_value(product.product_type) == ProductType.EGGS.value
+                and untracked_quantity + overrepresented_quantity > ZERO
+            ):
+                egg_stock_reconciliation.append(
+                    EggStockReconciliationResponse(
+                        product_id=product.id,
+                        product_name=product.name,
+                        unit_name=base_unit.name,
+                        unit_abbreviation=base_unit.abbreviation,
+                        supported_quantity=egg_quantity,
+                        ledger_quantity=ledger_quantity,
+                        difference=egg_quantity - ledger_quantity,
+                    )
                 )
             valued_cost = balance["valued_cost"]
             unvalued_quantity = (
@@ -1193,6 +1746,54 @@ class ProfitabilityReportService:
             inventory_losses,
             complete=complete,
         )
+        product_performance_rows = []
+        estimated_product_ids = {
+            movement.product_id
+            for movement in movements
+            if movement.source_type == "estimated_stock_valuation"
+            and movement.occurred_on <= to_date
+        }
+        for row in product_performance.values():
+            quantity_sold = row["quantity_sold"]
+            uncosted_quantity = row["uncosted_quantity"]
+            net_sales, average_selling_price, average_unit_cost, gross_profit = (
+                _product_margin_values(
+                    quantity_sold,
+                    row["sales_value"],
+                    row["sales_credits"],
+                    row["cost_of_goods_sold"],
+                    uncosted_quantity,
+                )
+            )
+            product_performance_rows.append(
+                ProfitabilityProductResponse(
+                    product_id=row["product_id"],
+                    product_name=row["product_name"],
+                    product_type=row["product_type"],
+                    unit_name=row["unit_name"],
+                    unit_abbreviation=row["unit_abbreviation"],
+                    quantity_sold=quantity_sold,
+                    sales_value=_money(row["sales_value"]),
+                    sales_credits=_money(row["sales_credits"]),
+                    net_sales=net_sales,
+                    cost_of_goods_sold=_money(row["cost_of_goods_sold"]),
+                    average_selling_price=average_selling_price,
+                    average_unit_cost=average_unit_cost,
+                    gross_profit=gross_profit,
+                    uncosted_quantity=uncosted_quantity,
+                    uncosted_movement_quantity=row[
+                        "uncosted_movement_quantity"
+                    ],
+                    uncosted_movement_types=sorted(
+                        row["uncosted_movement_types"]
+                    ),
+                    estimated_cost_used=(
+                        row["product_id"] in estimated_product_ids
+                        and quantity_sold > ZERO
+                    ),
+                )
+            )
+        product_performance_rows.sort(key=lambda item: item.product_name.casefold())
         return ProfitabilityReportResponse(
             farm_id=farm_id,
             from_date=from_date,
@@ -1205,12 +1806,23 @@ class ProfitabilityReportService:
             cost_of_goods_sold=_money(sale_cogs),
             product_consumption_cost=_money(total_consumption_cost),
             egg_production_cost_allocated=_money(allocated_egg_cost),
+            egg_production_zero_cost_confirmed=egg_production_zero_cost_confirmed,
+            egg_production_zero_cost_confirmation_available=(
+                has_egg_production
+                and not consumption_rows
+                and not egg_production_zero_cost_confirmed
+            ),
             unallocated_consumption_expense=_money(unallocated_consumption_expense),
             operating_expenses=_money(operating_expenses),
             inventory_losses=_money(inventory_losses),
             net_profit=_money(net) if net is not None else None,
             closing_stock_as_of=to_date,
             closing_stock=closing_stock,
+            product_performance=product_performance_rows,
+            egg_stock_reconciliation=egg_stock_reconciliation,
+            reserved_egg_sales=reserved_egg_sales,
+            unvalued_period_movement_count=unvalued_period_movement_count,
+            missing_inventory_record_count=missing_inventory_record_count,
             closing_stock_valued_cost=_money(closing_valued_cost),
             closing_stock_unvalued_quantity=closing_unvalued_quantity,
             untracked_chicken_quantity=untracked_chicken_quantity,
