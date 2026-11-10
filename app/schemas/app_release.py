@@ -50,7 +50,8 @@ class DownloadInvitationRecordResponse(BaseModel):
     id: UUID
     release_id: UUID
     recipient_email: EmailStr
-    delivery_status: Literal["pending", "sent", "failed"]
+    delivery_channel: Literal["email", "whatsapp", "both"]
+    delivery_status: Literal["pending", "sent", "failed", "prepared"]
     expires_at: datetime
     revoked_at: datetime | None
     created_at: datetime
@@ -63,3 +64,45 @@ class DownloadInvitationResponse(BaseModel):
     recipient_email: EmailStr
     delivery_status: Literal["sent"]
     expires_at: datetime
+
+
+class ReleaseRecipientFarmResponse(BaseModel):
+    farm_id: UUID
+    farm_name: str
+    phone_number: str | None
+    email: str | None
+
+
+class ReleaseRecipientResponse(BaseModel):
+    user_id: UUID
+    email: EmailStr
+    farms: list[ReleaseRecipientFarmResponse]
+
+
+class ReleaseRecipientPageResponse(BaseModel):
+    items: list[ReleaseRecipientResponse]
+    total: int
+    offset: int
+    limit: int
+
+
+class BulkInvitationRecipient(BaseModel):
+    user_id: UUID
+    farm_id: UUID | None = None
+
+
+class BulkDownloadInvitationRequest(BaseModel):
+    recipients: list[BulkInvitationRecipient] = Field(min_length=1, max_length=100)
+    channel: Literal["email", "whatsapp", "both"]
+
+
+class BulkDownloadInvitationResult(BaseModel):
+    user_id: UUID
+    recipient_email: EmailStr
+    email_status: Literal["sent", "failed", "not_requested"]
+    whatsapp_url: str | None
+    error: str | None
+
+
+class BulkDownloadInvitationResponse(BaseModel):
+    results: list[BulkDownloadInvitationResult]

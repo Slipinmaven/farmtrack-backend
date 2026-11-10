@@ -154,6 +154,14 @@ backend host's environment; it must never be included in the mobile app. Set
 `APP_RELEASE_ADMIN_EMAILS` to a comma-separated allowlist of administrator
 account emails.
 
+Release administrators can search active registered users, select multiple
+recipients, and invite by email, WhatsApp, or both. Email is sent by the
+configured SMTP service. WhatsApp invitations use a prepared click-to-send
+message for a linked farm phone number; the administrator must review and send
+the message in WhatsApp. Farm phone numbers need an international country code.
+Apply the latest Alembic migration before using these recipient and WhatsApp
+features.
+
 To publish a mobile build, increment `expo.version` in `app.json` in the
 separate mobile repository, then run this command from that repository:
 

@@ -20,8 +20,12 @@ class DownloadToken(Base):
     __tablename__ = "download_tokens"
     __table_args__ = (
         CheckConstraint(
-            "delivery_status IN ('pending', 'sent', 'failed')",
+            "delivery_status IN ('pending', 'sent', 'failed', 'prepared')",
             name="check_download_tokens_delivery_status",
+        ),
+        CheckConstraint(
+            "delivery_channel IN ('email', 'whatsapp', 'both')",
+            name="check_download_tokens_delivery_channel",
         ),
         Index("ix_download_tokens_expires_at", "expires_at"),
         Index("ix_download_tokens_release_id", "release_id"),
@@ -35,6 +39,9 @@ class DownloadToken(Base):
         nullable=False,
     )
     recipient_email: Mapped[str] = mapped_column(String(320), nullable=False)
+    delivery_channel: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="email", server_default="email"
+    )
     delivery_status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="pending", server_default="pending"
     )

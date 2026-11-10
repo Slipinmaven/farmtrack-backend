@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta, timezone
 import hashlib
 from types import SimpleNamespace
+from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
 
 import httpx
@@ -17,7 +18,11 @@ from app.core.exceptions import (
 )
 from app.dependencies.app_release import require_app_release_admin
 from app.models.download_token import DownloadToken
-from app.schemas.app_release import AppReleaseCreate
+from app.schemas.app_release import (
+    AppReleaseCreate,
+    BulkDownloadInvitationRequest,
+    BulkInvitationRecipient,
+)
 from app.services.app_release_service import AppReleaseService
 from app.services.github_release_storage_service import GitHubReleaseStorageService
 
@@ -133,16 +138,31 @@ class FakeStorage:
 
 
 class FakeEmail:
-    is_configured = True
-
-    def __init__(self, *, failure=None):
+    def __init__(self, *, failure=None, is_configured=True):
         self.sent = []
         self.failure = failure
+        self.is_configured = is_configured
 
     async def send_release_download_invitation(self, **kwargs):
         if self.failure:
             raise self.failure
         self.sent.append(kwargs)
+
+
+class FakeRecipientRepository:
+    def __init__(self, users=None, farms_by_user=None):
+        self.users = users or {}
+        self.farms_by_user = farms_by_user or {}
+
+    async def get_recipients(self, user_ids):
+        return (
+            {user_id: self.users[user_id] for user_id in user_ids if user_id in self.users},
+            {user_id: self.farms_by_user.get(user_id, []) for user_id in user_ids},
+        )
+
+    async def list_recipients(self, *, search, limit, offset):
+        users = list(self.users.values())[offset : offset + limit]
+        return users, len(self.users), self.farms_by_user
 
 
 def create_release(**overrides):
@@ -169,12 +189,14 @@ def make_service(
     token_repository=None,
     storage=None,
     email=None,
+    recipient_repository=None,
 ):
     session = session or FakeSession()
     release_repository = release_repository or FakeReleaseRepository()
     storage = storage or FakeStorage()
     email = email or FakeEmail()
     token_repository = token_repository or FakeTokenRepository(session)
+    recipient_repository = recipient_repository or FakeRecipientRepository()
     monkeypatch.setattr(
         "app.services.app_release_service.AppReleaseRepository",
         lambda _session: release_repository,
@@ -182,6 +204,10 @@ def make_service(
     monkeypatch.setattr(
         "app.services.app_release_service.DownloadTokenRepository",
         lambda _session: token_repository,
+    )
+    monkeypatch.setattr(
+        "app.services.app_release_service.AppReleaseRecipientRepository",
+        lambda _session: recipient_repository,
     )
     return (
         AppReleaseService(session, storage_service=storage, email_service=email),
@@ -303,6 +329,38 @@ async def test_download_invitation_persists_only_hashed_token(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_release_recipient_directory_includes_linked_farm_contacts(monkeypatch):
+    user_id = uuid4()
+    farm_id = uuid4()
+    user = SimpleNamespace(id=user_id, email="person@example.com")
+    farm = SimpleNamespace(
+        id=farm_id,
+        name="Green Farm",
+        phone_number="+254712345678",
+        email="farm@example.com",
+    )
+    service, *_ = make_service(
+        monkeypatch,
+        recipient_repository=FakeRecipientRepository(
+            users={user_id: user},
+            farms_by_user={user_id: [farm]},
+        ),
+    )
+
+    page = await service.list_release_recipients(
+        search="green",
+        limit=25,
+        offset=0,
+    )
+
+    assert page.total == 1
+    assert page.items[0].email == user.email
+    assert page.items[0].farms[0].farm_id == farm_id
+    assert page.items[0].farms[0].phone_number == farm.phone_number
+    assert page.items[0].farms[0].email == farm.email
+
+
+@pytest.mark.asyncio
 async def test_failed_download_email_revokes_pending_token(monkeypatch):
     release = create_release()
     monkeypatch.setattr(
@@ -329,14 +387,245 @@ async def test_failed_download_email_revokes_pending_token(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_valid_download_uses_github_asset_and_tracks_access(monkeypatch):
+async def test_whatsapp_invitation_returns_link_and_persists_prepared_token(monkeypatch):
+    release = create_release()
+    user_id = uuid4()
+    farm_id = uuid4()
+    user = SimpleNamespace(id=user_id, email="person@example.com")
+    farm = SimpleNamespace(
+        id=farm_id,
+        name="Green Farm",
+        phone_number="+254 712 345 678",
+        email=None,
+    )
+    monkeypatch.setattr(
+        settings,
+        "app_public_base_url",
+        "https://api.farmtrack.example/",
+    )
+    email = FakeEmail(is_configured=False)
+    service, session, _repo, _tokens, _storage, _email = make_service(
+        monkeypatch,
+        release_repository=FakeReleaseRepository(release=release),
+        email=email,
+        recipient_repository=FakeRecipientRepository(
+            users={user_id: user},
+            farms_by_user={user_id: [farm]},
+        ),
+    )
+
+    results = await service.send_bulk_download_invitations(
+        release_id=release.id,
+        request=BulkDownloadInvitationRequest(
+            channel="whatsapp",
+            recipients=[
+                BulkInvitationRecipient(user_id=user_id, farm_id=farm_id),
+            ],
+        ),
+    )
+
+    token = session.added[0]
+    wa_url = urlsplit(results[0].whatsapp_url)
+    download_url = parse_qs(wa_url.query)["text"][0].split()[-1]
+    raw_token = download_url.rsplit("/", 1)[-1]
+    assert results[0].email_status == "not_requested"
+    assert wa_url.netloc == "wa.me"
+    assert wa_url.path == "/254712345678"
+    assert token.delivery_channel == "whatsapp"
+    assert token.delivery_status == "prepared"
+    assert token.token_hash == hashlib.sha256(raw_token.encode()).hexdigest()
+    assert email.sent == []
+
+
+@pytest.mark.asyncio
+async def test_both_channels_keep_whatsapp_invitation_when_email_is_unconfigured(
+    monkeypatch,
+):
+    release = create_release()
+    user_id = uuid4()
+    farm_id = uuid4()
+    user = SimpleNamespace(id=user_id, email="person@example.com")
+    farm = SimpleNamespace(
+        id=farm_id,
+        name="Green Farm",
+        phone_number="254712345678",
+        email=None,
+    )
+    monkeypatch.setattr(
+        settings,
+        "app_public_base_url",
+        "https://api.farmtrack.example",
+    )
+    service, session, _repo, _tokens, _storage, email = make_service(
+        monkeypatch,
+        release_repository=FakeReleaseRepository(release=release),
+        email=FakeEmail(is_configured=False),
+        recipient_repository=FakeRecipientRepository(
+            users={user_id: user},
+            farms_by_user={user_id: [farm]},
+        ),
+    )
+
+    results = await service.send_bulk_download_invitations(
+        release_id=release.id,
+        request=BulkDownloadInvitationRequest(
+            channel="both",
+            recipients=[
+                BulkInvitationRecipient(user_id=user_id, farm_id=farm_id),
+            ],
+        ),
+    )
+
+    assert results[0].email_status == "failed"
+    assert results[0].whatsapp_url is not None
+    assert session.added[0].delivery_status == "prepared"
+    assert session.added[0].delivery_channel == "both"
+    assert email.sent == []
+
+
+@pytest.mark.asyncio
+async def test_both_channels_send_email_and_prepare_whatsapp_link(monkeypatch):
+    release = create_release()
+    user_id = uuid4()
+    farm_id = uuid4()
+    user = SimpleNamespace(id=user_id, email="person@example.com")
+    farm = SimpleNamespace(
+        id=farm_id,
+        name="Green Farm",
+        phone_number="+254712345678",
+        email=None,
+    )
+    monkeypatch.setattr(
+        settings,
+        "app_public_base_url",
+        "https://api.farmtrack.example",
+    )
+    email = FakeEmail()
+    service, session, _repo, _tokens, _storage, _email = make_service(
+        monkeypatch,
+        release_repository=FakeReleaseRepository(release=release),
+        email=email,
+        recipient_repository=FakeRecipientRepository(
+            users={user_id: user},
+            farms_by_user={user_id: [farm]},
+        ),
+    )
+
+    results = await service.send_bulk_download_invitations(
+        release_id=release.id,
+        request=BulkDownloadInvitationRequest(
+            channel="both",
+            recipients=[
+                BulkInvitationRecipient(user_id=user_id, farm_id=farm_id),
+            ],
+        ),
+    )
+
+    assert results[0].email_status == "sent"
+    assert results[0].whatsapp_url is not None
+    assert session.added[0].delivery_status == "sent"
+    assert session.added[0].delivery_channel == "both"
+    assert len(email.sent) == 1
+    assert email.sent[0]["recipient_email"] == user.email
+
+
+@pytest.mark.asyncio
+async def test_failed_email_keeps_whatsapp_invitation_usable(monkeypatch):
+    release = create_release()
+    user_id = uuid4()
+    farm_id = uuid4()
+    user = SimpleNamespace(id=user_id, email="person@example.com")
+    farm = SimpleNamespace(
+        id=farm_id,
+        name="Green Farm",
+        phone_number="+254712345678",
+        email=None,
+    )
+    monkeypatch.setattr(
+        settings,
+        "app_public_base_url",
+        "https://api.farmtrack.example",
+    )
+    service, session, _repo, _tokens, _storage, _email = make_service(
+        monkeypatch,
+        release_repository=FakeReleaseRepository(release=release),
+        email=FakeEmail(failure=RuntimeError("provider unavailable")),
+        recipient_repository=FakeRecipientRepository(
+            users={user_id: user},
+            farms_by_user={user_id: [farm]},
+        ),
+    )
+
+    results = await service.send_bulk_download_invitations(
+        release_id=release.id,
+        request=BulkDownloadInvitationRequest(
+            channel="both",
+            recipients=[
+                BulkInvitationRecipient(user_id=user_id, farm_id=farm_id),
+            ],
+        ),
+    )
+
+    assert results[0].email_status == "failed"
+    assert results[0].whatsapp_url is not None
+    assert session.added[0].delivery_status == "prepared"
+    assert session.added[0].revoked_at is None
+
+
+@pytest.mark.asyncio
+async def test_whatsapp_invitation_requires_international_farm_phone(monkeypatch):
+    release = create_release()
+    user_id = uuid4()
+    farm_id = uuid4()
+    user = SimpleNamespace(id=user_id, email="person@example.com")
+    farm = SimpleNamespace(
+        id=farm_id,
+        name="Green Farm",
+        phone_number="0712345678",
+        email=None,
+    )
+    service, session, _repo, _tokens, _storage, _email = make_service(
+        monkeypatch,
+        release_repository=FakeReleaseRepository(release=release),
+        recipient_repository=FakeRecipientRepository(
+            users={user_id: user},
+            farms_by_user={user_id: [farm]},
+        ),
+    )
+    monkeypatch.setattr(
+        settings,
+        "app_public_base_url",
+        "https://api.farmtrack.example",
+    )
+
+    with pytest.raises(AppError) as error:
+        await service.send_bulk_download_invitations(
+            release_id=release.id,
+            request=BulkDownloadInvitationRequest(
+                channel="whatsapp",
+                recipients=[
+                    BulkInvitationRecipient(user_id=user_id, farm_id=farm_id),
+                ],
+            ),
+        )
+
+    assert error.value.code == "INVALID_WHATSAPP_PHONE"
+    assert session.added == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("delivery_status", ["sent", "prepared"])
+async def test_valid_download_uses_github_asset_and_tracks_access(
+    monkeypatch,
+    delivery_status,
+):
     release = create_release()
     token = SimpleNamespace(
         id=uuid4(),
         token_hash=hashlib.sha256(b"raw-download-token").hexdigest(),
         release_id=release.id,
         recipient_email="person@example.com",
-        delivery_status="sent",
+        delivery_status=delivery_status,
         expires_at=datetime.now(timezone.utc) + timedelta(days=1),
         revoked_at=None,
         access_count=0,

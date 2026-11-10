@@ -10,10 +10,13 @@ from app.models.user import User
 from app.schemas.app_release import (
     AppReleaseCreate,
     AppReleaseResponse,
+    BulkDownloadInvitationRequest,
+    BulkDownloadInvitationResponse,
     DownloadInvitationRecordResponse,
     DownloadInvitationRequest,
     DownloadInvitationResponse,
     GitHubReleaseAssetResponse,
+    ReleaseRecipientPageResponse,
 )
 from app.services.app_release_service import AppReleaseService
 
@@ -44,6 +47,24 @@ async def list_app_releases(
 ) -> list[AppReleaseResponse]:
     releases = await AppReleaseService(session).list_releases()
     return [AppReleaseResponse.model_validate(release) for release in releases]
+
+
+@router.get(
+    "/app-releases/recipients",
+    response_model=ReleaseRecipientPageResponse,
+)
+async def list_release_recipients(
+    search: str = Query(default="", max_length=100),
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
+    _admin: User = Depends(require_app_release_admin),
+    session: AsyncSession = Depends(get_database_session),
+) -> ReleaseRecipientPageResponse:
+    return await AppReleaseService(session).list_release_recipients(
+        search=search,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get(
@@ -102,6 +123,24 @@ async def invite_app_download(
         delivery_status="sent",
         expires_at=token.expires_at,
     )
+
+
+@router.post(
+    "/app-releases/{release_id}/invitations/bulk",
+    response_model=BulkDownloadInvitationResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def invite_multiple_app_downloads(
+    release_id: UUID,
+    request: BulkDownloadInvitationRequest,
+    _admin: User = Depends(require_app_release_admin),
+    session: AsyncSession = Depends(get_database_session),
+) -> BulkDownloadInvitationResponse:
+    results = await AppReleaseService(session).send_bulk_download_invitations(
+        release_id=release_id,
+        request=request,
+    )
+    return BulkDownloadInvitationResponse(results=results)
 
 
 @router.delete(
