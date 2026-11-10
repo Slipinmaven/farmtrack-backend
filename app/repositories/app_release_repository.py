@@ -87,3 +87,11 @@ class DownloadTokenRepository:
             .with_for_update()
         )
         return result.scalar_one_or_none()
+
+    async def get_with_release(self, token_hash: str) -> DownloadToken | None:
+        result = await self.session.execute(
+            select(DownloadToken)
+            .options(selectinload(DownloadToken.release))
+            .where(DownloadToken.token_hash == token_hash)
+        )
+        return result.scalar_one_or_none()

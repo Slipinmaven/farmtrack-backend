@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 import hashlib
+import html
 import re
 import secrets
 from urllib.parse import quote
@@ -7,7 +8,7 @@ from uuid import UUID
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
-from starlette.responses import Response
+from starlette.responses import HTMLResponse, Response
 
 from app.core.config import settings
 from app.core.exceptions import AppError, ConflictError, ResourceNotFoundError
@@ -28,6 +29,7 @@ from app.schemas.app_release import (
     ReleaseRecipientFarmResponse,
     ReleaseRecipientPageResponse,
     ReleaseRecipientResponse,
+    ReleaseShareInvitationResponse,
     WhatsAppInvitationResponse,
     WhatsAppInvitationRequest,
 )
@@ -250,8 +252,9 @@ class AppReleaseService:
             f"{settings.app_public_base_url.rstrip('/')}"
             f"/api/v1/downloads/{raw_token}"
         )
+        share_url = f"{download_url}/share"
         share_message = self._release_invitation_message(release)
-        whatsapp_message = f"{share_message}\n{download_url}"
+        whatsapp_message = f"{share_message}\n{share_url}"
         return WhatsAppInvitationResponse(
             id=token.id,
             recipient_phone=phone,
@@ -260,7 +263,141 @@ class AppReleaseService:
             whatsapp_url=f"https://wa.me/{phone}?text={quote(whatsapp_message)}",
             share_message=share_message,
             download_url=download_url,
+            share_url=share_url,
+            preview_image_url=(
+                f"{settings.app_public_base_url.rstrip('/')}"
+                "/api/v1/app-releases/share-preview.png"
+            ),
             expires_at=expires_at,
+        )
+
+    async def prepare_release_share_invitation(
+        self,
+        *,
+        release_id: UUID,
+    ) -> ReleaseShareInvitationResponse:
+        release = await self.releases.get_release(release_id)
+        if release is None or not release.is_active:
+            raise ResourceNotFoundError("Active app release not found.")
+        if settings.app_public_base_url is None:
+            raise AppError(
+                "APP_PUBLIC_URL_UNAVAILABLE",
+                "Download invitations are not configured.",
+                503,
+            )
+
+        raw_token = secrets.token_urlsafe(32)
+        expires_at = datetime.now(timezone.utc) + timedelta(
+            days=settings.download_token_expiry_days
+        )
+        token = DownloadToken(
+            token_hash=hashlib.sha256(raw_token.encode("utf-8")).hexdigest(),
+            release_id=release.id,
+            recipient_email=None,
+            recipient_phone=None,
+            delivery_channel="whatsapp",
+            delivery_status="prepared",
+            expires_at=expires_at,
+        )
+        self.session.add(token)
+        await self.session.commit()
+
+        base_url = settings.app_public_base_url.rstrip("/")
+        download_url = f"{base_url}/api/v1/downloads/{raw_token}"
+        share_url = f"{download_url}/share"
+        preview_image_url = (
+            f"{base_url}/api/v1/app-releases/share-preview.png"
+        )
+        share_message = self._release_invitation_message(release)
+        whatsapp_message = f"{share_message}\n{share_url}"
+        return ReleaseShareInvitationResponse(
+            id=token.id,
+            delivery_channel="whatsapp",
+            delivery_status="prepared",
+            whatsapp_url=f"https://wa.me/?text={quote(whatsapp_message)}",
+            share_message=share_message,
+            download_url=download_url,
+            share_url=share_url,
+            preview_image_url=preview_image_url,
+            expires_at=expires_at,
+        )
+
+    async def create_download_share_page(self, raw_token: str) -> HTMLResponse:
+        token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+        token = await self.tokens.get_with_release(token_hash)
+        token = self._validate_download_token(token)
+
+        release = token.release
+        base_url = settings.app_public_base_url
+        if base_url is None:
+            raise AppError(
+                "APP_PUBLIC_URL_UNAVAILABLE",
+                "Download invitations are not configured.",
+                503,
+            )
+        base_url = base_url.rstrip("/")
+        share_url = f"{base_url}/api/v1/downloads/{raw_token}/share"
+        download_url = f"{base_url}/api/v1/downloads/{raw_token}"
+        image_url = f"{base_url}/api/v1/app-releases/share-preview.png"
+        title = f"FarmTrack for Android — Version {html.escape(release.version)}"
+        description = (
+            "Manage your farm with FarmTrack. Download the Android app using "
+            "this private invitation link."
+        )
+        if release.release_notes:
+            description += f" What's new: {release.release_notes.strip()}"
+        description = html.escape(description[:300])
+        document = f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>{title}</title>
+  <meta name="description" content="{description}">
+  <meta property="og:type" content="website">
+  <meta property="og:site_name" content="FarmTrack">
+  <meta property="og:title" content="{title}">
+  <meta property="og:description" content="{description}">
+  <meta property="og:url" content="{html.escape(share_url, quote=True)}">
+  <meta property="og:image" content="{html.escape(image_url, quote=True)}">
+  <meta property="og:image:secure_url" content="{html.escape(image_url, quote=True)}">
+  <meta property="og:image:type" content="image/png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="{title}">
+  <meta name="twitter:description" content="{description}">
+  <meta name="twitter:image" content="{html.escape(image_url, quote=True)}">
+  <style>
+    body {{ margin: 0; min-height: 100vh; display: grid; place-items: center;
+      padding: 24px; box-sizing: border-box; background: #f2f6f2;
+      color: #23392b; font: 16px system-ui, sans-serif; }}
+    main {{ width: min(100%, 520px); overflow: hidden; border: 1px solid #dce8df;
+      border-radius: 20px; background: white; box-shadow: 0 16px 48px #173d2b18; }}
+    img {{ display: block; width: 100%; aspect-ratio: 1200 / 630; object-fit: cover; }}
+    section {{ padding: 24px; }}
+    h1 {{ margin: 0 0 10px; font-size: 24px; }}
+    p {{ color: #617166; line-height: 1.6; }}
+    a {{ display: inline-flex; min-height: 48px; align-items: center; padding: 0 20px;
+      border-radius: 10px; background: #26734a; color: white; font-weight: 700;
+      text-decoration: none; }}
+  </style>
+</head>
+<body>
+  <main>
+    <img src="{html.escape(image_url, quote=True)}" alt="FarmTrack farm management app">
+    <section>
+      <h1>{title}</h1>
+      <p>{description}</p>
+      <a href="{html.escape(download_url, quote=True)}">Download FarmTrack for Android</a>
+    </section>
+  </main>
+</body>
+</html>"""
+        return HTMLResponse(
+            document,
+            headers={"Cache-Control": "public, max-age=300"},
         )
 
     async def send_bulk_download_invitations(
@@ -349,10 +486,11 @@ class AppReleaseService:
                 f"{settings.app_public_base_url.rstrip('/')}"
                 f"/api/v1/downloads/{raw_token}"
             )
+            share_url = f"{download_url}/share"
             whatsapp_url = None
             if wants_whatsapp_for_recipient:
                 message = (
-                    f"{self._release_invitation_message(release)}\n{download_url}"
+                    f"{self._release_invitation_message(release)}\n{share_url}"
                 )
                 whatsapp_url = (
                     f"https://wa.me/{whatsapp_phone}?text={quote(message)}"
@@ -442,11 +580,37 @@ class AppReleaseService:
         token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
         token = await self.tokens.get_with_release_for_update(token_hash)
         now = datetime.now(timezone.utc)
+        token = self._validate_download_token(token, now=now)
+        asset_id = token.release.github_asset_id
+        if asset_id is None:
+            raise AppError(
+                "APP_RELEASE_UNAVAILABLE",
+                "This app release is no longer available.",
+                410,
+            )
+
+        response = await self.storage_service.create_download_response(
+            asset_id,
+            file_name=token.release.file_name,
+        )
+        token.last_accessed_at = now
+        token.access_count += 1
+        await self.session.commit()
+        return response
+
+    @staticmethod
+    def _validate_download_token(
+        token: DownloadToken | None,
+        *,
+        now: datetime | None = None,
+    ) -> DownloadToken:
         if token is None:
             raise ResourceNotFoundError("This download link is invalid.")
         if token.delivery_status not in {"sent", "prepared"}:
             raise ResourceNotFoundError("This download link is invalid.")
-        if token.revoked_at is not None or token.expires_at <= now:
+        if token.revoked_at is not None or token.expires_at <= (
+            now or datetime.now(timezone.utc)
+        ):
             raise AppError(
                 "DOWNLOAD_LINK_EXPIRED",
                 "This download link has expired or been revoked.",
@@ -464,12 +628,10 @@ class AppReleaseService:
                 "This app release is no longer available.",
                 410,
             )
-
-        response = await self.storage_service.create_download_response(
-            token.release.github_asset_id,
-            file_name=token.release.file_name,
-        )
-        token.last_accessed_at = now
-        token.access_count += 1
-        await self.session.commit()
-        return response
+        return token
+        if token.release.github_asset_id is None:
+            raise AppError(
+                "APP_RELEASE_UNAVAILABLE",
+                "This app release is no longer available.",
+                410,
+            )

@@ -1,8 +1,9 @@
+from pathlib import Path as FilePath
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Path, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from starlette.responses import Response
+from starlette.responses import FileResponse
 
 from app.core.database import get_database_session
 from app.dependencies.app_release import require_app_release_admin
@@ -17,6 +18,7 @@ from app.schemas.app_release import (
     DownloadInvitationResponse,
     GitHubReleaseAssetResponse,
     ReleaseRecipientPageResponse,
+    ReleaseShareInvitationResponse,
     WhatsAppInvitationRequest,
     WhatsAppInvitationResponse,
 )
@@ -145,6 +147,39 @@ async def prepare_whatsapp_download_invitation(
 
 
 @router.post(
+    "/app-releases/{release_id}/invitations/share",
+    response_model=ReleaseShareInvitationResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def prepare_release_share_invitation(
+    release_id: UUID,
+    _admin: User = Depends(require_app_release_admin),
+    session: AsyncSession = Depends(get_database_session),
+) -> ReleaseShareInvitationResponse:
+    return await AppReleaseService(session).prepare_release_share_invitation(
+        release_id=release_id,
+    )
+
+
+@router.get(
+    "/app-releases/share-preview.png",
+    response_class=FileResponse,
+    include_in_schema=False,
+)
+async def get_release_share_preview_image() -> FileResponse:
+    image_path = (
+        FilePath(__file__).resolve().parents[3]
+        / "static"
+        / "farmtrack-share-preview.png"
+    )
+    return FileResponse(
+        image_path,
+        media_type="image/png",
+        headers={"Cache-Control": "public, max-age=86400"},
+    )
+
+
+@router.post(
     "/app-releases/{release_id}/invitations/bulk",
     response_model=BulkDownloadInvitationResponse,
     status_code=status.HTTP_201_CREATED,
@@ -185,3 +220,15 @@ async def download_app(
     session: AsyncSession = Depends(get_database_session),
 ) -> Response:
     return await AppReleaseService(session).create_download_response(token)
+
+
+@router.get(
+    "/downloads/{token}/share",
+    response_class=Response,
+    include_in_schema=False,
+)
+async def download_app_share_page(
+    token: str = Path(min_length=32, max_length=128),
+    session: AsyncSession = Depends(get_database_session),
+) -> Response:
+    return await AppReleaseService(session).create_download_share_page(token)

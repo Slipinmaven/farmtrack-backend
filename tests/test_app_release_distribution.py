@@ -6,9 +6,12 @@ from uuid import uuid4
 
 import httpx
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from pydantic import SecretStr, ValidationError
 from starlette.responses import RedirectResponse
 
+from app.api.v1.endpoints.app_releases import router as app_release_router
 from app.core.config import Settings, settings
 from app.core.exceptions import (
     AppError,
@@ -26,6 +29,18 @@ from app.schemas.app_release import (
 )
 from app.services.app_release_service import AppReleaseService
 from app.services.github_release_storage_service import GitHubReleaseStorageService
+
+
+def test_share_preview_image_is_available_as_public_png():
+    application = FastAPI()
+    application.include_router(app_release_router, prefix="/api/v1")
+
+    with TestClient(application) as client:
+        response = client.get("/api/v1/app-releases/share-preview.png")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "image/png"
+    assert response.content.startswith(b"\x89PNG\r\n\x1a\n")
 
 
 def test_release_admin_emails_parse_comma_separated_environment_value(monkeypatch):
@@ -106,6 +121,12 @@ class FakeTokenRepository:
         )
 
     async def get_with_release_for_update(self, token_hash):
+        self.looked_up_hashes.append(token_hash)
+        if self.token and self.token.token_hash == token_hash:
+            return self.token
+        return None
+
+    async def get_with_release(self, token_hash):
         self.looked_up_hashes.append(token_hash)
         if self.token and self.token.token_hash == token_hash:
             return self.token
@@ -428,14 +449,15 @@ async def test_whatsapp_invitation_returns_link_and_persists_prepared_token(monk
     token = session.added[0]
     wa_url = urlsplit(results[0].whatsapp_url)
     message = parse_qs(wa_url.query)["text"][0]
-    download_url = message.split()[-1]
-    raw_token = download_url.rsplit("/", 1)[-1]
+    share_url = message.split()[-1]
+    raw_token = share_url.split("/api/v1/downloads/", 1)[1].split("/", 1)[0]
     assert results[0].email_status == "not_requested"
     assert wa_url.netloc == "wa.me"
     assert wa_url.path == "/254712345678"
     assert "Hi! 👋" in message
     assert "Version 1.2.3" in message
     assert "What’s new:\nBug fixes" in message
+    assert share_url.endswith(f"/{raw_token}/share")
     assert token.delivery_channel == "whatsapp"
     assert token.delivery_status == "prepared"
     assert token.token_hash == hashlib.sha256(raw_token.encode()).hexdigest()
@@ -463,7 +485,8 @@ async def test_custom_whatsapp_number_prepares_link_without_email(monkeypatch):
     token = session.added[0]
     wa_url = urlsplit(invitation.whatsapp_url)
     message = parse_qs(wa_url.query)["text"][0]
-    raw_token = message.split()[-1].rsplit("/", 1)[-1]
+    share_url = message.split()[-1]
+    raw_token = share_url.split("/api/v1/downloads/", 1)[1].split("/", 1)[0]
     assert invitation.recipient_phone == "254712345678"
     assert invitation.delivery_status == "prepared"
     assert "FarmTrack" in invitation.share_message
@@ -472,7 +495,9 @@ async def test_custom_whatsapp_number_prepares_link_without_email(monkeypatch):
     assert invitation.download_url == (
         f"https://api.farmtrack.example/api/v1/downloads/{raw_token}"
     )
-    assert invitation.download_url in message
+    assert invitation.share_url == share_url
+    assert invitation.share_url.endswith(f"/{raw_token}/share")
+    assert invitation.download_url in invitation.share_url
     assert wa_url.netloc == "wa.me"
     assert wa_url.path == "/254712345678"
     assert token.recipient_email is None
@@ -482,6 +507,81 @@ async def test_custom_whatsapp_number_prepares_link_without_email(monkeypatch):
     assert token.token_hash == hashlib.sha256(raw_token.encode()).hexdigest()
     assert email.sent == []
     assert session.commits == 1
+
+
+@pytest.mark.asyncio
+async def test_release_share_invitation_does_not_require_a_phone_number(monkeypatch):
+    release = create_release()
+    monkeypatch.setattr(
+        settings,
+        "app_public_base_url",
+        "https://api.farmtrack.example/",
+    )
+    service, session, _repo, _tokens, _storage, email = make_service(
+        monkeypatch,
+        release_repository=FakeReleaseRepository(release=release),
+    )
+
+    invitation = await service.prepare_release_share_invitation(
+        release_id=release.id,
+    )
+
+    token = session.added[0]
+    wa_url = urlsplit(invitation.whatsapp_url)
+    message = parse_qs(wa_url.query)["text"][0]
+    raw_token = invitation.download_url.rsplit("/", 1)[-1]
+    assert wa_url.netloc == "wa.me"
+    assert wa_url.path == "/"
+    assert invitation.share_url == f"{invitation.download_url}/share"
+    assert invitation.share_url in message
+    assert invitation.preview_image_url.endswith(
+        "/api/v1/app-releases/share-preview.png"
+    )
+    assert token.recipient_email is None
+    assert token.recipient_phone is None
+    assert token.delivery_status == "prepared"
+    assert token.token_hash == hashlib.sha256(raw_token.encode()).hexdigest()
+    assert email.sent == []
+
+
+@pytest.mark.asyncio
+async def test_download_share_page_has_social_preview_image_and_private_cta(monkeypatch):
+    raw_token = "a" * 32
+    release = create_release()
+    token = DownloadToken(
+        id=uuid4(),
+        token_hash=hashlib.sha256(raw_token.encode()).hexdigest(),
+        release_id=release.id,
+        recipient_email=None,
+        recipient_phone=None,
+        delivery_channel="whatsapp",
+        delivery_status="prepared",
+        expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+        release=release,
+    )
+    monkeypatch.setattr(
+        settings,
+        "app_public_base_url",
+        "https://api.farmtrack.example",
+    )
+    service, _session, _repo, _tokens, _storage, _email = make_service(
+        monkeypatch,
+        token_repository=FakeTokenRepository(FakeSession(), token=token),
+    )
+
+    page = await service.create_download_share_page(raw_token)
+
+    assert page.media_type == "text/html"
+    assert 'property="og:image"' in page.body.decode()
+    assert (
+        "https://api.farmtrack.example/api/v1/app-releases/share-preview.png"
+        in page.body.decode()
+    )
+    assert (
+        f"https://api.farmtrack.example/api/v1/downloads/{raw_token}"
+        in page.body.decode()
+    )
+    assert "Download FarmTrack for Android" in page.body.decode()
 
 
 @pytest.mark.asyncio

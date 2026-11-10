@@ -79,6 +79,20 @@ class WhatsAppInvitationResponse(BaseModel):
     whatsapp_url: str
     share_message: str
     download_url: str
+    share_url: str
+    preview_image_url: str
+    expires_at: datetime
+
+
+class ReleaseShareInvitationResponse(BaseModel):
+    id: UUID
+    delivery_channel: Literal["whatsapp"]
+    delivery_status: Literal["prepared"]
+    whatsapp_url: str
+    share_message: str
+    download_url: str
+    share_url: str
+    preview_image_url: str
     expires_at: datetime
 
 
