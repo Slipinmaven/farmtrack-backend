@@ -104,7 +104,7 @@ requires an active membership (or farm ownership).
 ### App Distribution
 
 - `app_releases`: `id` PK; `version`; positive `version_code`; `platform` (`android`); nullable `github_asset_id` (unique GitHub release asset ID); APK `file_name` and nullable `file_size`; nullable release notes; active/latest flags; timestamps. A null asset ID marks a legacy release that cannot be downloaded.
-- `download_tokens`: `id` PK; unique SHA-256 `token_hash`; `release_id` FK; normalized recipient email; delivery status; expiry and optional revocation timestamps; access count and last-access timestamp; `created_at`.
+- `download_tokens`: `id` PK; unique SHA-256 `token_hash`; SHA-256 `password_hash`; `release_id` FK; normalized recipient email and optional phone; delivery channel and status; expiry and optional revocation timestamps; access count and last-access timestamp; `created_at`.
 
 ## Enums
 

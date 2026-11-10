@@ -77,6 +77,7 @@ class SMTPEmailService:
         version: str,
         release_notes: str | None,
         download_url: str,
+        download_password: str,
         expires_at: datetime,
         delivery_id: UUID,
     ) -> None:
@@ -91,6 +92,7 @@ class SMTPEmailService:
             f"FarmTrack for Android, version {version}, is ready to download."
             f"{notes_text}\n\n"
             f"Download FarmTrack: {download_url}\n\n"
+            f"Download password: {download_password}\n\n"
             f"This link expires on {expiry_text}. "
             "Open the link on your Android device, download the APK, and open "
             "the downloaded file to install it. If prompted, allow your browser "
@@ -102,6 +104,7 @@ class SMTPEmailService:
                 version=version,
                 release_notes=release_notes,
                 download_url=download_url,
+                download_password=download_password,
                 expiry_text=expiry_text,
             ),
             subtype="html",
@@ -114,10 +117,12 @@ class SMTPEmailService:
         version: str,
         release_notes: str | None,
         download_url: str,
+        download_password: str,
         expiry_text: str,
     ) -> str:
         safe_version = escape(version)
         safe_url = escape(download_url, quote=True)
+        safe_password = escape(download_password)
         notes_html = ""
         if release_notes:
             notes_html = (
@@ -149,6 +154,11 @@ class SMTPEmailService:
               </td></tr>
             </table>
             <p style="margin:20px 0 0;font-size:13px;line-height:1.6;color:#536157;">Button not working? Copy this link into your browser:<br><a href="{safe_url}" style="color:#205c3b;word-break:break-all;">{safe_url}</a></p>
+            <div style="margin-top:18px;padding:16px;border:1px solid #d5e5d8;border-radius:10px;background:#f4f8f4;">
+              <strong style="font-size:14px;">Download password</strong>
+              <p style="margin:8px 0 0;font-size:20px;font-weight:bold;letter-spacing:2px;color:#205c3b;">{safe_password}</p>
+              <p style="margin:8px 0 0;font-size:12px;line-height:1.5;color:#536157;">Enter this password on the download page. Keep it private.</p>
+            </div>
             <div style="margin-top:24px;padding:18px;border-radius:10px;background:#f3f6f2;">
               <strong style="font-size:14px;">Install on Android</strong>
               <ol style="margin:8px 0 0;padding-left:20px;font-size:13px;line-height:1.7;color:#536157;">

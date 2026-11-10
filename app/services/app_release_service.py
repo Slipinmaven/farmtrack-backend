@@ -37,6 +37,7 @@ from app.services.github_release_storage_service import GitHubReleaseStorageServ
 from app.services.smtp_email_service import SMTPEmailService
 
 logger = get_application_logger()
+DOWNLOAD_PASSWORD_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
 
 
 class AppReleaseService:
@@ -146,7 +147,7 @@ class AppReleaseService:
         *,
         release_id: UUID,
         recipient_email: str,
-    ) -> DownloadToken:
+    ) -> tuple[DownloadToken, str]:
         release = await self.releases.get_release(release_id)
         if release is None or not release.is_active:
             raise ResourceNotFoundError("Active app release not found.")
@@ -164,8 +165,10 @@ class AppReleaseService:
             )
 
         raw_token = secrets.token_urlsafe(32)
+        download_password = self._new_download_password()
         token = DownloadToken(
             token_hash=hashlib.sha256(raw_token.encode("utf-8")).hexdigest(),
+            password_hash=self._hash_download_password(download_password),
             release_id=release.id,
             recipient_email=recipient_email.strip().lower(),
             delivery_channel="email",
@@ -186,6 +189,7 @@ class AppReleaseService:
                 version=release.version,
                 release_notes=release.release_notes,
                 download_url=download_url,
+                download_password=download_password,
                 expires_at=token.expires_at,
                 delivery_id=token.id,
             )
@@ -213,7 +217,7 @@ class AppReleaseService:
 
         token.delivery_status = "sent"
         await self.session.commit()
-        return token
+        return token, download_password
 
     async def prepare_whatsapp_download_invitation(
         self,
@@ -233,11 +237,13 @@ class AppReleaseService:
 
         phone = self._whatsapp_phone(request.phone_number, "recipient")
         raw_token = secrets.token_urlsafe(32)
+        download_password = self._new_download_password()
         expires_at = datetime.now(timezone.utc) + timedelta(
             days=settings.download_token_expiry_days
         )
         token = DownloadToken(
             token_hash=hashlib.sha256(raw_token.encode("utf-8")).hexdigest(),
+            password_hash=self._hash_download_password(download_password),
             release_id=release.id,
             recipient_email=None,
             recipient_phone=phone,
@@ -260,6 +266,7 @@ class AppReleaseService:
             recipient_phone=phone,
             delivery_channel="whatsapp",
             delivery_status="prepared",
+            download_password=download_password,
             whatsapp_url=f"https://wa.me/{phone}?text={quote(whatsapp_message)}",
             share_message=share_message,
             download_url=download_url,
@@ -287,11 +294,13 @@ class AppReleaseService:
             )
 
         raw_token = secrets.token_urlsafe(32)
+        download_password = self._new_download_password()
         expires_at = datetime.now(timezone.utc) + timedelta(
             days=settings.download_token_expiry_days
         )
         token = DownloadToken(
             token_hash=hashlib.sha256(raw_token.encode("utf-8")).hexdigest(),
+            password_hash=self._hash_download_password(download_password),
             release_id=release.id,
             recipient_email=None,
             recipient_phone=None,
@@ -314,6 +323,7 @@ class AppReleaseService:
             id=token.id,
             delivery_channel="whatsapp",
             delivery_status="prepared",
+            download_password=download_password,
             whatsapp_url=f"https://wa.me/?text={quote(whatsapp_message)}",
             share_message=share_message,
             download_url=download_url,
@@ -400,6 +410,78 @@ class AppReleaseService:
             headers={"Cache-Control": "public, max-age=300"},
         )
 
+    async def create_download_password_page(
+        self,
+        raw_token: str,
+        *,
+        error: str | None = None,
+        status_code: int = 200,
+    ) -> HTMLResponse:
+        token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+        token = await self.tokens.get_with_release(token_hash)
+        token = self._validate_download_token(token)
+        version = html.escape(token.release.version)
+        action = html.escape(
+            f"{settings.app_public_base_url.rstrip('/')}/api/v1/downloads/{raw_token}",
+            quote=True,
+        ) if settings.app_public_base_url else f"/api/v1/downloads/{raw_token}"
+        error_message = (
+            f'<p class="error" role="alert">{html.escape(error)}</p>'
+            if error
+            else ""
+        )
+        document = f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex,nofollow">
+  <title>Download FarmTrack for Android</title>
+  <style>
+    * {{ box-sizing: border-box; }}
+    body {{ margin: 0; min-height: 100vh; display: grid; place-items: center;
+      padding: 24px; background: #f2f6f2; color: #23392b;
+      font: 16px system-ui, sans-serif; }}
+    main {{ width: min(100%, 440px); padding: 28px; border: 1px solid #dce8df;
+      border-radius: 20px; background: white; box-shadow: 0 16px 48px #173d2b18; }}
+    .brand {{ color: #26734a; font-size: 13px; font-weight: 800;
+      letter-spacing: 1.5px; text-transform: uppercase; }}
+    h1 {{ margin: 14px 0 8px; font-size: 25px; }}
+    p {{ color: #617166; line-height: 1.55; }}
+    label {{ display: block; margin: 20px 0 7px; font-size: 14px; font-weight: 700; }}
+    input {{ width: 100%; min-height: 48px; padding: 10px 12px;
+      border: 1px solid #cbd9ce; border-radius: 10px; font: inherit; }}
+    button {{ width: 100%; min-height: 48px; margin-top: 14px; border: 0;
+      border-radius: 10px; background: #26734a; color: white; font: inherit;
+      font-weight: 700; cursor: pointer; }}
+    .error {{ padding: 10px 12px; border-radius: 9px; background: #fff1ef;
+      color: #a13e39; font-size: 14px; }}
+    .hint {{ margin-bottom: 0; font-size: 13px; }}
+  </style>
+</head>
+<body>
+  <main>
+    <div class="brand">FarmTrack</div>
+    <h1>Download FarmTrack</h1>
+    <p>Enter the invitation password to download version {version} for Android.</p>
+    {error_message}
+    <form method="post" action="{action}" autocomplete="off">
+      <label for="password">Invitation password</label>
+      <input id="password" name="password" type="password" required
+        minlength="16" maxlength="16" autocapitalize="characters"
+        autocomplete="one-time-code" autofocus>
+      <button type="submit">Verify and download APK</button>
+    </form>
+    <p class="hint">Ask the person who sent this link for the separate password.</p>
+  </main>
+</body>
+</html>"""
+        return HTMLResponse(
+            document,
+            status_code=status_code,
+            headers={"Cache-Control": "no-store"},
+        )
+
     async def send_bulk_download_invitations(
         self,
         *,
@@ -471,8 +553,10 @@ class AppReleaseService:
                 else "prepared"
             )
             raw_token = secrets.token_urlsafe(32)
+            download_password = self._new_download_password()
             token = DownloadToken(
                 token_hash=hashlib.sha256(raw_token.encode("utf-8")).hexdigest(),
+                password_hash=self._hash_download_password(download_password),
                 release_id=release.id,
                 recipient_email=recipient_email,
                 delivery_channel=request.channel,
@@ -510,6 +594,7 @@ class AppReleaseService:
                             version=release.version,
                             release_notes=release.release_notes,
                             download_url=download_url,
+                            download_password=download_password,
                             expires_at=token.expires_at,
                             delivery_id=token.id,
                         )
@@ -545,6 +630,11 @@ class AppReleaseService:
                     user_id=user_id,
                     recipient_email=recipient_email,
                     email_status=email_status,
+                    download_password=(
+                        download_password
+                        if email_status == "sent" or wants_whatsapp_for_recipient
+                        else None
+                    ),
                     whatsapp_url=whatsapp_url,
                     error=error,
                 )
@@ -561,7 +651,11 @@ class AppReleaseService:
         if release.release_notes:
             message_parts.extend(["", "What’s new:", release.release_notes.strip()])
         message_parts.extend(
-            ["", "Use your private download link below to install FarmTrack:"]
+            [
+                "",
+                "Open your private download link below, then enter the separate "
+                "password I will send you:",
+            ]
         )
         return "\n".join(message_parts)
 
@@ -576,11 +670,25 @@ class AppReleaseService:
             )
         return digits
 
-    async def create_download_response(self, raw_token: str) -> Response:
+    async def create_download_response(
+        self,
+        raw_token: str,
+        *,
+        password: str,
+    ) -> Response:
         token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
         token = await self.tokens.get_with_release_for_update(token_hash)
         now = datetime.now(timezone.utc)
         token = self._validate_download_token(token, now=now)
+        if not secrets.compare_digest(
+            self._hash_download_password(password),
+            token.password_hash,
+        ):
+            return await self.create_download_password_page(
+                raw_token,
+                error="That password is incorrect. Check it and try again.",
+                status_code=401,
+            )
         asset_id = token.release.github_asset_id
         if asset_id is None:
             raise AppError(
@@ -597,6 +705,16 @@ class AppReleaseService:
         token.access_count += 1
         await self.session.commit()
         return response
+
+    @staticmethod
+    def _new_download_password() -> str:
+        return "".join(
+            secrets.choice(DOWNLOAD_PASSWORD_ALPHABET) for _ in range(16)
+        )
+
+    @staticmethod
+    def _hash_download_password(password: str) -> str:
+        return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
     @staticmethod
     def _validate_download_token(

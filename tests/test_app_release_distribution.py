@@ -337,7 +337,7 @@ async def test_download_invitation_persists_only_hashed_token(monkeypatch):
         release_repository=FakeReleaseRepository(release=release),
     )
 
-    token = await service.send_download_invitation(
+    token, download_password = await service.send_download_invitation(
         release_id=release.id,
         recipient_email="  person@example.com ",
     )
@@ -347,6 +347,9 @@ async def test_download_invitation_persists_only_hashed_token(monkeypatch):
     assert token.recipient_email == "person@example.com"
     assert token.token_hash == hashlib.sha256(raw_token.encode()).hexdigest()
     assert raw_token not in token.token_hash
+    assert token.password_hash == hashlib.sha256(download_password.encode()).hexdigest()
+    assert email.sent[0]["download_password"] == download_password
+    assert len(download_password) == 16
     assert session.commits == 2
 
 
@@ -461,6 +464,11 @@ async def test_whatsapp_invitation_returns_link_and_persists_prepared_token(monk
     assert token.delivery_channel == "whatsapp"
     assert token.delivery_status == "prepared"
     assert token.token_hash == hashlib.sha256(raw_token.encode()).hexdigest()
+    assert results[0].download_password is not None
+    assert token.password_hash == hashlib.sha256(
+        results[0].download_password.encode()
+    ).hexdigest()
+    assert len(results[0].download_password) == 16
     assert email.sent == []
 
 
@@ -505,6 +513,10 @@ async def test_custom_whatsapp_number_prepares_link_without_email(monkeypatch):
     assert token.delivery_channel == "whatsapp"
     assert token.delivery_status == "prepared"
     assert token.token_hash == hashlib.sha256(raw_token.encode()).hexdigest()
+    assert token.password_hash == hashlib.sha256(
+        invitation.download_password.encode()
+    ).hexdigest()
+    assert len(invitation.download_password) == 16
     assert email.sent == []
     assert session.commits == 1
 
@@ -551,6 +563,9 @@ async def test_download_share_page_has_social_preview_image_and_private_cta(monk
     token = DownloadToken(
         id=uuid4(),
         token_hash=hashlib.sha256(raw_token.encode()).hexdigest(),
+        password_hash=AppReleaseService._hash_download_password(
+            "ABCD2345EFGH6789"
+        ),
         release_id=release.id,
         recipient_email=None,
         recipient_phone=None,
@@ -798,6 +813,9 @@ async def test_valid_download_uses_github_asset_and_tracks_access(
         delivery_status=delivery_status,
         expires_at=datetime.now(timezone.utc) + timedelta(days=1),
         revoked_at=None,
+        password_hash=AppReleaseService._hash_download_password(
+            "ABCD2345EFGH6789"
+        ),
         access_count=0,
         last_accessed_at=None,
         release=release,
@@ -810,7 +828,10 @@ async def test_valid_download_uses_github_asset_and_tracks_access(
         token_repository=tokens,
     )
 
-    response = await service.create_download_response("raw-download-token")
+    response = await service.create_download_response(
+        "raw-download-token",
+        password="ABCD2345EFGH6789",
+    )
 
     assert response.status_code == 307
     assert storage.downloaded == [
@@ -846,12 +867,18 @@ async def test_expired_or_invalid_token_does_not_download(monkeypatch):
     )
 
     with pytest.raises(AppError) as error:
-        await service.create_download_response("expired-token")
+        await service.create_download_response(
+            "expired-token",
+            password="ABCD2345EFGH6789",
+        )
     assert error.value.status_code == 410
     assert storage.downloaded == []
 
     with pytest.raises(ResourceNotFoundError):
-        await service.create_download_response("unknown-token")
+        await service.create_download_response(
+            "unknown-token",
+            password="ABCD2345EFGH6789",
+        )
     assert storage.downloaded == []
 
 
@@ -892,7 +919,10 @@ async def test_pending_revoked_and_inactive_downloads_are_rejected(
     )
 
     with pytest.raises(AppError) as error:
-        await service.create_download_response("blocked-token")
+        await service.create_download_response(
+            "blocked-token",
+            password="ABCD2345EFGH6789",
+        )
 
     assert error.value.status_code == expected_status
     assert storage.downloaded == []
@@ -913,6 +943,43 @@ async def test_download_invitation_can_be_revoked(monkeypatch):
 
     assert token.revoked_at is not None
     assert session.commits == 1
+
+
+@pytest.mark.asyncio
+async def test_download_rejects_incorrect_password_without_tracking_access(monkeypatch):
+    release = create_release()
+    token = SimpleNamespace(
+        id=uuid4(),
+        token_hash=hashlib.sha256(b"raw-download-token").hexdigest(),
+        release_id=release.id,
+        recipient_email="person@example.com",
+        delivery_status="sent",
+        expires_at=datetime.now(timezone.utc) + timedelta(days=1),
+        revoked_at=None,
+        password_hash=AppReleaseService._hash_download_password(
+            "ABCD2345EFGH6789"
+        ),
+        access_count=0,
+        last_accessed_at=None,
+        release=release,
+    )
+    session = FakeSession()
+    service, _session, _repo, _tokens, storage, _email = make_service(
+        monkeypatch,
+        session=session,
+        token_repository=FakeTokenRepository(session, token=token),
+    )
+
+    response = await service.create_download_response(
+        "raw-download-token",
+        password="WRONG2345EFGH6789",
+    )
+
+    assert response.status_code == 401
+    assert "That password is incorrect" in response.body.decode()
+    assert storage.downloaded == []
+    assert token.access_count == 0
+    assert session.commits == 0
 
 
 def test_download_token_path_is_redacted_from_request_logs():
@@ -1108,17 +1175,43 @@ async def test_github_storage_rejects_untrusted_download_host(monkeypatch):
 @pytest.mark.asyncio
 async def test_download_endpoint_returns_storage_response(monkeypatch):
     from app.api.v1.endpoints import app_releases
+    from starlette.requests import Request
 
     class DownloadService:
         def __init__(self, _session):
             pass
 
-        async def create_download_response(self, token):
+        async def create_download_response(self, token, *, password):
             assert token == "opaque-download-token"
+            assert password == "ABCD2345EFGH6789"
             return RedirectResponse("https://github.com/downloads/farmtrack.apk")
 
     monkeypatch.setattr(app_releases, "AppReleaseService", DownloadService)
+
+    async def receive():
+        return {
+            "type": "http.request",
+            "body": b"password=ABCD2345EFGH6789",
+            "more_body": False,
+        }
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/api/v1/downloads/opaque-download-token",
+            "headers": [(b"content-type", b"application/x-www-form-urlencoded")],
+            "query_string": b"",
+            "server": ("testserver", 80),
+            "client": ("testclient", 50000),
+            "scheme": "http",
+            "http_version": "1.1",
+            "root_path": "",
+        },
+        receive=receive,
+    )
     response = await app_releases.download_app(
+        request=request,
         token="opaque-download-token",
         session=FakeSession(),
     )

@@ -138,6 +138,7 @@ async def test_release_download_email_has_html_and_text_alternatives():
         version="1.2.3",
         release_notes="<New fixes & improvements>",
         download_url="https://api.example.com/api/v1/downloads/secret-token",
+        download_password="ABCD2345EFGH6789",
         expires_at=datetime(2026, 11, 16, tzinfo=timezone.utc),
         delivery_id=uuid4(),
     )
@@ -147,6 +148,8 @@ async def test_release_download_email_has_html_and_text_alternatives():
     html_content = message.get_body(preferencelist=("html",)).get_content()
     assert message["Subject"] == "Download FarmTrack for Android"
     assert "secret-token" in text_content
+    assert "Download password: ABCD2345EFGH6789" in text_content
+    assert "ABCD2345EFGH6789" in html_content
     assert "install apps from this source" in text_content
     assert "&lt;New fixes &amp; improvements&gt;" in html_content
     assert 'href="https://api.example.com/api/v1/downloads/secret-token"' in html_content

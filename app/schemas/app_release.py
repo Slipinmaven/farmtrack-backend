@@ -63,6 +63,7 @@ class DownloadInvitationRecordResponse(BaseModel):
 class DownloadInvitationResponse(BaseModel):
     id: UUID
     recipient_email: EmailStr
+    download_password: str = Field(min_length=16, max_length=16)
     delivery_status: Literal["sent"]
     expires_at: datetime
 
@@ -76,6 +77,7 @@ class WhatsAppInvitationResponse(BaseModel):
     recipient_phone: str
     delivery_channel: Literal["whatsapp"]
     delivery_status: Literal["prepared"]
+    download_password: str = Field(min_length=16, max_length=16)
     whatsapp_url: str
     share_message: str
     download_url: str
@@ -88,6 +90,7 @@ class ReleaseShareInvitationResponse(BaseModel):
     id: UUID
     delivery_channel: Literal["whatsapp"]
     delivery_status: Literal["prepared"]
+    download_password: str = Field(min_length=16, max_length=16)
     whatsapp_url: str
     share_message: str
     download_url: str
@@ -130,6 +133,7 @@ class BulkDownloadInvitationResult(BaseModel):
     user_id: UUID
     recipient_email: EmailStr
     email_status: Literal["sent", "failed", "not_requested"]
+    download_password: str | None = Field(default=None, min_length=16, max_length=16)
     whatsapp_url: str | None
     error: str | None
 

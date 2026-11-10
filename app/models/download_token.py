@@ -33,6 +33,7 @@ class DownloadToken(Base):
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     token_hash: Mapped[str] = mapped_column(String(64), nullable=False, unique=True)
+    password_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     release_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True),
         ForeignKey("app_releases.id", ondelete="CASCADE"),

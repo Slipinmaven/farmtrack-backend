@@ -1,9 +1,10 @@
 from pathlib import Path as FilePath
 from uuid import UUID
+from urllib.parse import parse_qs
 
-from fastapi import APIRouter, Depends, Path, Query, Response, status
+from fastapi import APIRouter, Depends, Path, Query, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from starlette.responses import FileResponse
+from starlette.responses import FileResponse, HTMLResponse
 
 from app.core.database import get_database_session
 from app.dependencies.app_release import require_app_release_admin
@@ -114,16 +115,21 @@ async def list_app_release_invitations(
 async def invite_app_download(
     release_id: UUID,
     request: DownloadInvitationRequest,
+    response: Response,
     _admin: User = Depends(require_app_release_admin),
     session: AsyncSession = Depends(get_database_session),
 ) -> DownloadInvitationResponse:
-    token = await AppReleaseService(session).send_download_invitation(
-        release_id=release_id,
-        recipient_email=str(request.recipient_email),
+    response.headers["Cache-Control"] = "no-store"
+    token, download_password = (
+        await AppReleaseService(session).send_download_invitation(
+            release_id=release_id,
+            recipient_email=str(request.recipient_email),
+        )
     )
     return DownloadInvitationResponse(
         id=token.id,
         recipient_email=token.recipient_email,
+        download_password=download_password,
         delivery_status="sent",
         expires_at=token.expires_at,
     )
@@ -137,9 +143,11 @@ async def invite_app_download(
 async def prepare_whatsapp_download_invitation(
     release_id: UUID,
     request: WhatsAppInvitationRequest,
+    response: Response,
     _admin: User = Depends(require_app_release_admin),
     session: AsyncSession = Depends(get_database_session),
 ) -> WhatsAppInvitationResponse:
+    response.headers["Cache-Control"] = "no-store"
     return await AppReleaseService(session).prepare_whatsapp_download_invitation(
         release_id=release_id,
         request=request,
@@ -153,9 +161,11 @@ async def prepare_whatsapp_download_invitation(
 )
 async def prepare_release_share_invitation(
     release_id: UUID,
+    response: Response,
     _admin: User = Depends(require_app_release_admin),
     session: AsyncSession = Depends(get_database_session),
 ) -> ReleaseShareInvitationResponse:
+    response.headers["Cache-Control"] = "no-store"
     return await AppReleaseService(session).prepare_release_share_invitation(
         release_id=release_id,
     )
@@ -187,9 +197,11 @@ async def get_release_share_preview_image() -> FileResponse:
 async def invite_multiple_app_downloads(
     release_id: UUID,
     request: BulkDownloadInvitationRequest,
+    response: Response,
     _admin: User = Depends(require_app_release_admin),
     session: AsyncSession = Depends(get_database_session),
 ) -> BulkDownloadInvitationResponse:
+    response.headers["Cache-Control"] = "no-store"
     results = await AppReleaseService(session).send_bulk_download_invitations(
         release_id=release_id,
         request=request,
@@ -215,11 +227,38 @@ async def revoke_app_download_invitation(
     "/downloads/{token}",
     response_class=Response,
 )
+@router.post(
+    "/downloads/{token}",
+    response_class=Response,
+)
 async def download_app(
+    request: Request,
     token: str = Path(min_length=32, max_length=128),
     session: AsyncSession = Depends(get_database_session),
 ) -> Response:
-    return await AppReleaseService(session).create_download_response(token)
+    service = AppReleaseService(session)
+    if request.method == "GET":
+        return await service.create_download_password_page(token)
+    if request.method != "POST":
+        return Response(status_code=status.HTTP_405_METHOD_NOT_ALLOWED)
+    if "application/x-www-form-urlencoded" not in request.headers.get(
+        "content-type", ""
+    ).lower():
+        return await service.create_download_password_page(
+            token,
+            error="Submit the password using the download form.",
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+        )
+    body = await request.body()
+    if len(body) > 2048:
+        return await service.create_download_password_page(
+            token,
+            error="The password was not accepted. Please try again.",
+            status_code=status.HTTP_400_BAD_REQUEST,
+        )
+    fields = parse_qs(body.decode("utf-8", errors="replace"))
+    password = fields.get("password", [""])[0]
+    return await service.create_download_response(token, password=password)
 
 
 @router.get(

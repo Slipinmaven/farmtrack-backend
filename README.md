@@ -160,9 +160,11 @@ configured SMTP service. A release can also be shared without a recipient
 phone number using a private invitation link. Share links open a branded
 landing page with Open Graph metadata and a preview image before the secure
 download. WhatsApp messages include the release version, notes, and share
-link. Administrators may also prepare messages for specific phone numbers;
-phone numbers need an international country code. Apply the latest Alembic
-migrations before using these recipient and WhatsApp features.
+link; the generated download password is shown separately in Release Admin and
+must be sent separately. Email invitations include both the private link and
+its generated password. Administrators may also prepare messages for specific
+phone numbers; phone numbers need an international country code. Apply the
+latest Alembic migrations before using these recipient and WhatsApp features.
 
 To publish a mobile build, increment `expo.version` in `app.json` in the
 separate mobile repository, then run this command from that repository:
@@ -199,14 +201,19 @@ filename and size from GitHub's metadata. An administrator can list releases wit
 `GET /api/v1/app-releases`, and send an invitation with
 `POST /api/v1/app-releases/{release_id}/invitations`. Release management
 requires an authenticated FarmTrack account. The email link itself does not
-require an account: `GET /api/v1/downloads/{token}` validates a time-limited
-invitation credential and obtains a temporary GitHub asset URL using the
-server-only token. GitHub serves the APK directly where possible; otherwise
-the backend streams it without buffering the whole file.
+require an account: `GET /api/v1/downloads/{token}` displays a password form.
+Submitting the generated password to the same URL verifies the time-limited
+invitation and obtains a temporary GitHub asset URL using the server-only token.
+GitHub serves the APK directly where possible; otherwise the backend streams it
+without buffering the whole file.
 An administrator can revoke a previously issued link with
 `DELETE /api/v1/app-releases/invitations/{invitation_id}`.
-Download tokens are stored hashed and expire after the configured number of
-days. Apply the Alembic migrations before using these endpoints. Existing
+Download tokens and password hashes are stored; generated passwords are only
+returned when an invitation is created. Passwords expire with their invitation,
+which expires after the configured number of days. Applying the password
+migration revokes existing invitations because their passwords cannot be
+recovered; issue fresh links after deployment. Apply the Alembic migrations
+before using these endpoints. Existing
 Supabase-backed release records are preserved but deactivated by the migration;
 register their GitHub assets as new releases.
 
