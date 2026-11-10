@@ -166,6 +166,14 @@ its generated password. Administrators may also prepare messages for specific
 phone numbers; phone numbers need an international country code. Apply the
 latest Alembic migrations before using these recipient and WhatsApp features.
 
+Signed-in Android apps can check `GET /api/v1/app-releases/updates/latest` with
+the `current_version_code` query parameter and download a newer active release
+through `GET /api/v1/app-releases/updates/{release_id}/download`. Both endpoints
+require an authenticated FarmTrack account. The update download is streamed
+through the backend so the app's bearer token is never forwarded to GitHub's
+temporary asset URL. Android still requires the user to confirm installation
+in the system package installer.
+
 To publish a mobile build, increment `expo.version` in `app.json` in the
 separate mobile repository, then run this command from that repository:
 

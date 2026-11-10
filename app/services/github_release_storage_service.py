@@ -137,6 +137,7 @@ class GitHubReleaseStorageService:
         asset_id: int,
         *,
         file_name: str,
+        follow_redirects: bool = False,
     ) -> Response:
         owner, repository, token = self._configuration()
         client = httpx.AsyncClient(timeout=httpx.Timeout(60.0))
@@ -153,9 +154,9 @@ class GitHubReleaseStorageService:
 
         if response.status_code in {301, 302, 303, 307, 308}:
             location = response.headers.get("location")
-            await response.aclose()
-            await client.aclose()
             if not location:
+                await response.aclose()
+                await client.aclose()
                 raise self._unavailable(
                     "GitHub did not provide an APK download location."
                 )
@@ -171,14 +172,34 @@ class GitHubReleaseStorageService:
                 or parsed_url.username is not None
                 or parsed_url.password is not None
             ):
+                await response.aclose()
+                await client.aclose()
                 raise self._unavailable(
                     "GitHub returned an invalid APK download location."
                 )
-            return RedirectResponse(
-                url=download_url,
-                status_code=303,
-                headers={"Cache-Control": "no-store"},
-            )
+            if not follow_redirects:
+                await response.aclose()
+                await client.aclose()
+                return RedirectResponse(
+                    url=download_url,
+                    status_code=303,
+                    headers={"Cache-Control": "no-store"},
+                )
+            await response.aclose()
+            try:
+                response = await client.send(
+                    client.build_request(
+                        "GET",
+                        download_url,
+                        headers={"Accept": "application/octet-stream"},
+                    ),
+                    stream=True,
+                )
+            except httpx.RequestError as exc:
+                await client.aclose()
+                raise self._unavailable(
+                    "Could not retrieve the APK from GitHub."
+                ) from exc
 
         if response.status_code == 200:
             content_type = response.headers.get("content-type", "").split(";", 1)[0]

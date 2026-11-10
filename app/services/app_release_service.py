@@ -24,6 +24,8 @@ from app.repositories.app_release_recipient_repository import (
 )
 from app.schemas.app_release import (
     AppReleaseCreate,
+    AppUpdateCheckResponse,
+    AvailableAppUpdate,
     BulkDownloadInvitationRequest,
     BulkDownloadInvitationResult,
     ReleaseRecipientFarmResponse,
@@ -84,6 +86,44 @@ class AppReleaseService:
 
     async def list_releases(self) -> list[AppRelease]:
         return await self.releases.list_releases()
+
+    async def check_for_app_update(
+        self,
+        *,
+        current_version_code: int,
+    ) -> AppUpdateCheckResponse:
+        release = await self.releases.get_latest_active_release("android")
+        if release is None or release.version_code <= current_version_code:
+            return AppUpdateCheckResponse(update_available=False)
+        return AppUpdateCheckResponse(
+            update_available=True,
+            release=AvailableAppUpdate(
+                id=release.id,
+                version=release.version,
+                version_code=release.version_code,
+                file_name=release.file_name,
+                file_size=release.file_size,
+                release_notes=release.release_notes,
+            ),
+        )
+
+    async def create_authenticated_update_download_response(
+        self,
+        release_id: UUID,
+    ) -> Response:
+        release = await self.releases.get_release(release_id)
+        if (
+            release is None
+            or not release.is_active
+            or not release.is_latest
+            or release.github_asset_id is None
+        ):
+            raise ResourceNotFoundError("This app update is no longer available.")
+        return await self.storage_service.create_download_response(
+            release.github_asset_id,
+            file_name=release.file_name,
+            follow_redirects=True,
+        )
 
     async def list_github_release_assets(
         self,

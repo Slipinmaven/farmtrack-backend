@@ -13,6 +13,7 @@ from starlette.responses import RedirectResponse
 
 from app.api.v1.endpoints.app_releases import router as app_release_router
 from app.core.config import Settings, settings
+from app.core.exception_handlers import register_exception_handlers
 from app.core.exceptions import (
     AppError,
     AuthorizationError,
@@ -41,6 +42,24 @@ def test_share_preview_image_is_available_as_public_png():
     assert response.status_code == 200
     assert response.headers["content-type"] == "image/png"
     assert response.content.startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def test_app_update_endpoints_require_authentication():
+    application = FastAPI()
+    register_exception_handlers(application)
+    application.include_router(app_release_router, prefix="/api/v1")
+
+    with TestClient(application) as client:
+        update_check = client.get(
+            "/api/v1/app-releases/updates/latest",
+            params={"current_version_code": 1},
+        )
+        update_download = client.get(
+            f"/api/v1/app-releases/updates/{uuid4()}/download",
+        )
+
+    assert update_check.status_code == 401
+    assert update_download.status_code == 401
 
 
 def test_release_admin_emails_parse_comma_separated_environment_value(monkeypatch):
@@ -88,6 +107,11 @@ class FakeReleaseRepository:
 
     async def get_release(self, _release_id):
         return self.release
+
+    async def get_latest_active_release(self, _platform):
+        if self.release and self.release.is_active and self.release.is_latest:
+            return self.release
+        return None
 
     async def get_by_version_code(self, _platform, _version_code):
         return self.release if self.duplicate else None
@@ -149,13 +173,21 @@ class FakeStorage:
     def __init__(self):
         self.verified = []
         self.downloaded = []
+        self.follow_redirects = []
 
     async def verify_asset(self, asset_id):
         self.verified.append(asset_id)
         return "farmtrack-1.2.3.apk", 1024
 
-    async def create_download_response(self, asset_id, *, file_name):
+    async def create_download_response(
+        self,
+        asset_id,
+        *,
+        file_name,
+        follow_redirects=False,
+    ):
         self.downloaded.append((asset_id, file_name))
+        self.follow_redirects.append(follow_redirects)
         return RedirectResponse("https://github.com/downloads/farmtrack.apk")
 
 
@@ -239,6 +271,48 @@ def make_service(
         storage,
         email,
     )
+
+
+@pytest.mark.asyncio
+async def test_update_check_returns_latest_release_only_when_newer(monkeypatch):
+    release = create_release(version_code=4)
+    service, *_ = make_service(
+        monkeypatch,
+        release_repository=FakeReleaseRepository(release=release),
+    )
+
+    update = await service.check_for_app_update(current_version_code=3)
+    current = await service.check_for_app_update(current_version_code=4)
+
+    assert update.update_available is True
+    assert update.release is not None
+    assert update.release.version_code == 4
+    assert update.release.file_name == "farmtrack-1.2.3.apk"
+    assert current.update_available is False
+    assert current.release is None
+
+
+@pytest.mark.asyncio
+async def test_update_download_requires_active_latest_release(monkeypatch):
+    release = create_release()
+    service, _session, _repository, _tokens, storage, _email = make_service(
+        monkeypatch,
+        release_repository=FakeReleaseRepository(release=release),
+    )
+
+    response = await service.create_authenticated_update_download_response(
+        release.id
+    )
+
+    assert response.status_code == 307
+    assert storage.downloaded == [
+        (release.github_asset_id, release.file_name)
+    ]
+    assert storage.follow_redirects == [True]
+
+    release.is_latest = False
+    with pytest.raises(ResourceNotFoundError):
+        await service.create_authenticated_update_download_response(release.id)
 
 
 @pytest.mark.asyncio
@@ -1080,6 +1154,57 @@ async def test_github_storage_redirects_to_temporary_asset_url(monkeypatch):
     assert response.headers["location"].startswith(
         "https://release-assets.githubusercontent.com/"
     )
+
+
+@pytest.mark.asyncio
+async def test_github_storage_streams_redirected_asset_without_forwarding_auth(
+    monkeypatch,
+):
+    monkeypatch.setattr(settings, "github_release_repository", "owner/backend")
+    monkeypatch.setattr(
+        settings,
+        "github_release_token",
+        SecretStr("server-only-token"),
+    )
+    captured = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        if request.url.host == "api.github.com":
+            return httpx.Response(
+                302,
+                headers={
+                    "Location": (
+                        "https://release-assets.githubusercontent.com/file.apk"
+                        "?token=short"
+                    )
+                },
+            )
+        return httpx.Response(
+            200,
+            content=b"apk-content",
+            headers={"Content-Type": "application/octet-stream"},
+        )
+
+    original_client = httpx.AsyncClient
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(
+        "app.services.github_release_storage_service.httpx.AsyncClient",
+        lambda **kwargs: original_client(transport=transport, **kwargs),
+    )
+
+    response = await GitHubReleaseStorageService().create_download_response(
+        123456,
+        file_name="farmtrack.apk",
+        follow_redirects=True,
+    )
+
+    assert response.status_code == 200
+    assert len(captured) == 2
+    assert captured[0].headers["Authorization"].startswith("Bearer ")
+    assert "Authorization" not in captured[1].headers
+    assert await response.body_iterator.__anext__() == b"apk-content"
+    await response.background()
 
 
 @pytest.mark.asyncio

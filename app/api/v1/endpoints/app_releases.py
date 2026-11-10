@@ -7,11 +7,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import FileResponse, HTMLResponse, RedirectResponse
 
 from app.core.database import get_database_session
+from app.dependencies.auth import get_current_user
 from app.dependencies.app_release import require_app_release_admin
 from app.models.user import User
 from app.schemas.app_release import (
     AppReleaseCreate,
     AppReleaseResponse,
+    AppUpdateCheckResponse,
     BulkDownloadInvitationRequest,
     BulkDownloadInvitationResponse,
     DownloadInvitationRecordResponse,
@@ -26,6 +28,34 @@ from app.schemas.app_release import (
 from app.services.app_release_service import AppReleaseService
 
 router = APIRouter(tags=["App Releases"])
+
+
+@router.get(
+    "/app-releases/updates/latest",
+    response_model=AppUpdateCheckResponse,
+)
+async def check_latest_app_update(
+    current_version_code: int = Query(gt=0),
+    _current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_database_session),
+) -> AppUpdateCheckResponse:
+    return await AppReleaseService(session).check_for_app_update(
+        current_version_code=current_version_code,
+    )
+
+
+@router.get(
+    "/app-releases/updates/{release_id}/download",
+    response_class=Response,
+)
+async def download_authenticated_app_update(
+    release_id: UUID,
+    _current_user: User = Depends(get_current_user),
+    session: AsyncSession = Depends(get_database_session),
+) -> Response:
+    return await AppReleaseService(
+        session
+    ).create_authenticated_update_download_response(release_id)
 
 
 @router.post(

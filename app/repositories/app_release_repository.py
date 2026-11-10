@@ -24,6 +24,20 @@ class AppReleaseRepository:
     async def get_release(self, release_id: UUID) -> AppRelease | None:
         return await self.session.get(AppRelease, release_id)
 
+    async def get_latest_active_release(self, platform: str) -> AppRelease | None:
+        result = await self.session.execute(
+            select(AppRelease)
+            .where(
+                AppRelease.platform == platform,
+                AppRelease.is_active.is_(True),
+                AppRelease.is_latest.is_(True),
+                AppRelease.github_asset_id.is_not(None),
+            )
+            .order_by(AppRelease.version_code.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
     async def get_by_version_code(self, platform: str, version_code: int) -> AppRelease | None:
         result = await self.session.execute(
             select(AppRelease).where(

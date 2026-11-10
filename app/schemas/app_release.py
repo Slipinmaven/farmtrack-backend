@@ -34,6 +34,20 @@ class AppReleaseResponse(BaseModel):
     updated_at: datetime
 
 
+class AvailableAppUpdate(BaseModel):
+    id: UUID
+    version: str
+    version_code: int
+    file_name: str
+    file_size: int | None
+    release_notes: str | None
+
+
+class AppUpdateCheckResponse(BaseModel):
+    update_available: bool
+    release: AvailableAppUpdate | None = None
+
+
 class GitHubReleaseAssetResponse(BaseModel):
     asset_id: int
     file_name: str
