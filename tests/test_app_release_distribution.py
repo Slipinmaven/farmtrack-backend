@@ -22,6 +22,7 @@ from app.schemas.app_release import (
     AppReleaseCreate,
     BulkDownloadInvitationRequest,
     BulkInvitationRecipient,
+    WhatsAppInvitationRequest,
 )
 from app.services.app_release_service import AppReleaseService
 from app.services.github_release_storage_service import GitHubReleaseStorageService
@@ -435,6 +436,64 @@ async def test_whatsapp_invitation_returns_link_and_persists_prepared_token(monk
     assert token.delivery_status == "prepared"
     assert token.token_hash == hashlib.sha256(raw_token.encode()).hexdigest()
     assert email.sent == []
+
+
+@pytest.mark.asyncio
+async def test_custom_whatsapp_number_prepares_link_without_email(monkeypatch):
+    release = create_release()
+    monkeypatch.setattr(
+        settings,
+        "app_public_base_url",
+        "https://api.farmtrack.example/",
+    )
+    service, session, _repo, _tokens, _storage, email = make_service(
+        monkeypatch,
+        release_repository=FakeReleaseRepository(release=release),
+    )
+
+    invitation = await service.prepare_whatsapp_download_invitation(
+        release_id=release.id,
+        request=WhatsAppInvitationRequest(phone_number="+254 712 345 678"),
+    )
+
+    token = session.added[0]
+    wa_url = urlsplit(invitation.whatsapp_url)
+    message = parse_qs(wa_url.query)["text"][0]
+    raw_token = message.split()[-1].rsplit("/", 1)[-1]
+    assert invitation.recipient_phone == "254712345678"
+    assert invitation.delivery_status == "prepared"
+    assert wa_url.netloc == "wa.me"
+    assert wa_url.path == "/254712345678"
+    assert token.recipient_email is None
+    assert token.recipient_phone == "254712345678"
+    assert token.delivery_channel == "whatsapp"
+    assert token.delivery_status == "prepared"
+    assert token.token_hash == hashlib.sha256(raw_token.encode()).hexdigest()
+    assert email.sent == []
+    assert session.commits == 1
+
+
+@pytest.mark.asyncio
+async def test_custom_whatsapp_number_requires_country_code(monkeypatch):
+    release = create_release()
+    monkeypatch.setattr(
+        settings,
+        "app_public_base_url",
+        "https://api.farmtrack.example",
+    )
+    service, session, *_ = make_service(
+        monkeypatch,
+        release_repository=FakeReleaseRepository(release=release),
+    )
+
+    with pytest.raises(AppError) as error:
+        await service.prepare_whatsapp_download_invitation(
+            release_id=release.id,
+            request=WhatsAppInvitationRequest(phone_number="0712345678"),
+        )
+
+    assert error.value.code == "INVALID_WHATSAPP_PHONE"
+    assert session.added == []
 
 
 @pytest.mark.asyncio

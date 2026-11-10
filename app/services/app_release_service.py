@@ -28,6 +28,8 @@ from app.schemas.app_release import (
     ReleaseRecipientFarmResponse,
     ReleaseRecipientPageResponse,
     ReleaseRecipientResponse,
+    WhatsAppInvitationResponse,
+    WhatsAppInvitationRequest,
 )
 from app.services.github_release_storage_service import GitHubReleaseStorageService
 from app.services.smtp_email_service import SMTPEmailService
@@ -210,6 +212,56 @@ class AppReleaseService:
         token.delivery_status = "sent"
         await self.session.commit()
         return token
+
+    async def prepare_whatsapp_download_invitation(
+        self,
+        *,
+        release_id: UUID,
+        request: WhatsAppInvitationRequest,
+    ) -> WhatsAppInvitationResponse:
+        release = await self.releases.get_release(release_id)
+        if release is None or not release.is_active:
+            raise ResourceNotFoundError("Active app release not found.")
+        if settings.app_public_base_url is None:
+            raise AppError(
+                "APP_PUBLIC_URL_UNAVAILABLE",
+                "Download invitations are not configured.",
+                503,
+            )
+
+        phone = self._whatsapp_phone(request.phone_number, "recipient")
+        raw_token = secrets.token_urlsafe(32)
+        expires_at = datetime.now(timezone.utc) + timedelta(
+            days=settings.download_token_expiry_days
+        )
+        token = DownloadToken(
+            token_hash=hashlib.sha256(raw_token.encode("utf-8")).hexdigest(),
+            release_id=release.id,
+            recipient_email=None,
+            recipient_phone=phone,
+            delivery_channel="whatsapp",
+            delivery_status="prepared",
+            expires_at=expires_at,
+        )
+        self.session.add(token)
+        await self.session.commit()
+
+        download_url = (
+            f"{settings.app_public_base_url.rstrip('/')}"
+            f"/api/v1/downloads/{raw_token}"
+        )
+        message = (
+            f"FarmTrack for Android version {release.version} is ready. "
+            f"Download it using this private link: {download_url}"
+        )
+        return WhatsAppInvitationResponse(
+            id=token.id,
+            recipient_phone=phone,
+            delivery_channel="whatsapp",
+            delivery_status="prepared",
+            whatsapp_url=f"https://wa.me/{phone}?text={quote(message)}",
+            expires_at=expires_at,
+        )
 
     async def send_bulk_download_invitations(
         self,

@@ -38,7 +38,8 @@ class DownloadToken(Base):
         ForeignKey("app_releases.id", ondelete="CASCADE"),
         nullable=False,
     )
-    recipient_email: Mapped[str] = mapped_column(String(320), nullable=False)
+    recipient_email: Mapped[str | None] = mapped_column(String(320), nullable=True)
+    recipient_phone: Mapped[str | None] = mapped_column(String(30), nullable=True)
     delivery_channel: Mapped[str] = mapped_column(
         String(20), nullable=False, default="email", server_default="email"
     )

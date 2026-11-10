@@ -49,7 +49,8 @@ class DownloadInvitationRecordResponse(BaseModel):
 
     id: UUID
     release_id: UUID
-    recipient_email: EmailStr
+    recipient_email: EmailStr | None
+    recipient_phone: str | None = None
     delivery_channel: Literal["email", "whatsapp", "both"]
     delivery_status: Literal["pending", "sent", "failed", "prepared"]
     expires_at: datetime
@@ -63,6 +64,19 @@ class DownloadInvitationResponse(BaseModel):
     id: UUID
     recipient_email: EmailStr
     delivery_status: Literal["sent"]
+    expires_at: datetime
+
+
+class WhatsAppInvitationRequest(BaseModel):
+    phone_number: str = Field(min_length=8, max_length=30)
+
+
+class WhatsAppInvitationResponse(BaseModel):
+    id: UUID
+    recipient_phone: str
+    delivery_channel: Literal["whatsapp"]
+    delivery_status: Literal["prepared"]
+    whatsapp_url: str
     expires_at: datetime
 
 

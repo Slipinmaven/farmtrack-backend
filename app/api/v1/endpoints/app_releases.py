@@ -17,6 +17,8 @@ from app.schemas.app_release import (
     DownloadInvitationResponse,
     GitHubReleaseAssetResponse,
     ReleaseRecipientPageResponse,
+    WhatsAppInvitationRequest,
+    WhatsAppInvitationResponse,
 )
 from app.services.app_release_service import AppReleaseService
 
@@ -122,6 +124,23 @@ async def invite_app_download(
         recipient_email=token.recipient_email,
         delivery_status="sent",
         expires_at=token.expires_at,
+    )
+
+
+@router.post(
+    "/app-releases/{release_id}/invitations/whatsapp",
+    response_model=WhatsAppInvitationResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def prepare_whatsapp_download_invitation(
+    release_id: UUID,
+    request: WhatsAppInvitationRequest,
+    _admin: User = Depends(require_app_release_admin),
+    session: AsyncSession = Depends(get_database_session),
+) -> WhatsAppInvitationResponse:
+    return await AppReleaseService(session).prepare_whatsapp_download_invitation(
+        release_id=release_id,
+        request=request,
     )
 
 
