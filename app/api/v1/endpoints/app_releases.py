@@ -26,6 +26,8 @@ from app.schemas.app_release import (
     WhatsAppInvitationResponse,
 )
 from app.services.app_release_service import AppReleaseService
+from app.services.email_gateway_service import FarmTrackEmailService
+from app.presentation.dependencies.services import get_email_gateway_service
 
 router = APIRouter(tags=["App Releases"])
 
@@ -148,10 +150,14 @@ async def invite_app_download(
     response: Response,
     _admin: User = Depends(require_app_release_admin),
     session: AsyncSession = Depends(get_database_session),
+    email_service: FarmTrackEmailService = Depends(get_email_gateway_service),
 ) -> DownloadInvitationResponse:
     response.headers["Cache-Control"] = "no-store"
     token, download_password = (
-        await AppReleaseService(session).send_download_invitation(
+        await AppReleaseService(
+            session,
+            email_service=email_service,
+        ).send_download_invitation(
             release_id=release_id,
             recipient_email=str(request.recipient_email),
         )
@@ -230,9 +236,13 @@ async def invite_multiple_app_downloads(
     response: Response,
     _admin: User = Depends(require_app_release_admin),
     session: AsyncSession = Depends(get_database_session),
+    email_service: FarmTrackEmailService = Depends(get_email_gateway_service),
 ) -> BulkDownloadInvitationResponse:
     response.headers["Cache-Control"] = "no-store"
-    results = await AppReleaseService(session).send_bulk_download_invitations(
+    results = await AppReleaseService(
+        session,
+        email_service=email_service,
+    ).send_bulk_download_invitations(
         release_id=release_id,
         request=request,
     )

@@ -25,7 +25,10 @@ class FarmMembershipResponse(BaseModel):
     id: UUID
     farm_id: UUID
     user_id: UUID
-    email: EmailStr = Field(validation_alias=AliasPath("user", "email"))
+    email: EmailStr | None = Field(
+        default=None,
+        validation_alias=AliasPath("user", "email"),
+    )
     farm_name: str | None = Field(
         default=None,
         validation_alias=AliasPath("farm", "name"),

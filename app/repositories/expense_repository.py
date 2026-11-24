@@ -54,6 +54,8 @@ class ExpenseRepository:
         search: str | None = None,
         payment_status: str | None = None,
         block_id: UUID | None = None,
+        exclude_cancelled: bool = False,
+        exclude_purchase_linked: bool = False,
         offset: int = 0,
         limit: int = 50,
     ) -> tuple[list[Expense], int]:
@@ -74,6 +76,10 @@ class ExpenseRepository:
             .scalar_subquery()
         )
         query = select(Expense).where(Expense.farm_id == farm_id)
+        if exclude_cancelled:
+            query = query.where(Expense.canceled_at.is_(None))
+        if exclude_purchase_linked:
+            query = query.where(Expense.purchase_transaction_id.is_(None))
         if category is not None:
             if isinstance(category, list):
                 query = query.where(Expense.category.in_(category))

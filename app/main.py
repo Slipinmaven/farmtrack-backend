@@ -4,9 +4,9 @@ import time
 from contextlib import asynccontextmanager
 from uuid import uuid4
 
+import httpx
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
 
 from app.api.v1.router import router as v1_router
 from app.core.config import settings
@@ -20,18 +20,28 @@ from app.core.logging import (
 )
 from app.services.notification_dispatcher import process_pending_notifications
 from app.services.reminder_service import enqueue_due_reminder_notifications
+from app.services.data_deletion_service import DataDeletionService
+from app.services.email_gateway_service import FarmTrackEmailService
 
 _REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 logger = get_logger("api")
 
 
-async def _notification_worker_loop(interval_seconds: float = 5.0, batch_size: int = 20) -> None:
+async def _notification_worker_loop(
+    email_service: FarmTrackEmailService,
+    interval_seconds: float = 5.0,
+    batch_size: int = 20,
+) -> None:
     while True:
         try:
             async with async_session_factory() as session:
                 try:
                     await enqueue_due_reminder_notifications(session)
-                    await process_pending_notifications(session, batch_size=batch_size)
+                    await process_pending_notifications(
+                        session,
+                        batch_size=batch_size,
+                        email_service=email_service,
+                    )
                 except Exception:
                     logger.exception(
                         "notification_worker_session_failed",
@@ -48,14 +58,35 @@ async def _notification_worker_loop(interval_seconds: float = 5.0, batch_size: i
             await asyncio.sleep(interval_seconds)
 
 
+async def _deletion_worker_loop(interval_seconds: float = 3600.0) -> None:
+    while True:
+        try:
+            async with async_session_factory() as session:
+                await DataDeletionService.process_expired_deletions(session)
+            await asyncio.sleep(interval_seconds)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception(
+                "scheduled_deletion_worker_failed",
+                extra={"event": "scheduled_deletion_worker_failed"},
+            )
+            await asyncio.sleep(interval_seconds)
+
+
 def _request_id(request: Request) -> str:
     supplied = request.headers.get("X-Request-ID", "")
     return supplied if _REQUEST_ID_PATTERN.fullmatch(supplied) else str(uuid4())
 
 
 @asynccontextmanager
-async def lifespan(_: FastAPI):
+async def lifespan(app: FastAPI):
     configure_logging()
+    email_client = httpx.AsyncClient(
+        timeout=settings.email_gateway_timeout_seconds,
+        follow_redirects=True,
+    )
+    app.state.email_gateway_service = FarmTrackEmailService(email_client)
     logger.info(
         "application_started",
         extra={
@@ -65,21 +96,23 @@ async def lifespan(_: FastAPI):
             "database_connections_per_process": (
                 settings.database_pool_size + settings.database_max_overflow
             ),
-            "smtp_email_configured": (
-                settings.smtp_username is not None
-                and settings.smtp_password is not None
-            ),
+            "email_gateway_configured": app.state.email_gateway_service.is_configured,
         },
     )
-    worker_task = asyncio.create_task(_notification_worker_loop())
+    worker_task = asyncio.create_task(
+        _notification_worker_loop(app.state.email_gateway_service)
+    )
+    deletion_worker_task = asyncio.create_task(_deletion_worker_loop())
     try:
         yield
     finally:
         worker_task.cancel()
+        deletion_worker_task.cancel()
         try:
-            await worker_task
+            await asyncio.gather(worker_task, deletion_worker_task)
         except asyncio.CancelledError:
             pass
+        await email_client.aclose()
         await dispose_database_engine()
         logger.info("application_stopped", extra={"request_id": "-"})
 
@@ -145,8 +178,3 @@ async def request_logging_middleware(request: Request, call_next):
 
 app.include_router(v1_router, prefix="/api/v1")
 settings.media_directory.mkdir(parents=True, exist_ok=True)
-app.mount(
-    "/media",
-    StaticFiles(directory=settings.media_directory),
-    name="media",
-)

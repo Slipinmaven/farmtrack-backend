@@ -59,6 +59,8 @@ class SalesReportService:
                     farm_id,
                     from_date=filters.from_date,
                     to_date=filters.to_date,
+                    from_time=filters.from_time,
+                    to_time=filters.to_time,
                     category=filters.category,
                     status=status,
                     search=filters.search,
@@ -130,6 +132,11 @@ class SalesReportService:
                         id=transaction.id,
                         reference_number=transaction.reference_number,
                         transaction_date=transaction.transaction_date,
+                        transaction_time=getattr(
+                            transaction,
+                            "transaction_time",
+                            None,
+                        ),
                         status=transaction.status,
                         customer_name=(
                             transaction.contact.name

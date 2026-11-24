@@ -35,6 +35,16 @@ class RefreshTokenRepository():
             .values(revoked_at=revoked_at)
         )
 
+    async def revoke_for_user(self, user_id: UUID, revoked_at: datetime) -> None:
+        await self.session.execute(
+            update(RefreshToken)
+            .where(
+                RefreshToken.user_id == user_id,
+                RefreshToken.revoked_at.is_(None),
+            )
+            .values(revoked_at=revoked_at)
+        )
+
     async def revoke_for_device(
         self,
         user_id: UUID,

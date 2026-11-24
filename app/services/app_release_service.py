@@ -36,7 +36,7 @@ from app.schemas.app_release import (
     WhatsAppInvitationRequest,
 )
 from app.services.github_release_storage_service import GitHubReleaseStorageService
-from app.services.smtp_email_service import SMTPEmailService
+from app.services.email_gateway_service import FarmTrackEmailService
 
 logger = get_application_logger()
 DOWNLOAD_PASSWORD_ALPHABET = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
@@ -48,7 +48,7 @@ class AppReleaseService:
         session: AsyncSession,
         *,
         storage_service: GitHubReleaseStorageService | None = None,
-        email_service: SMTPEmailService | None = None,
+        email_service: FarmTrackEmailService | None = None,
         recipient_repository: AppReleaseRecipientRepository | None = None,
     ):
         self.session = session
@@ -56,7 +56,7 @@ class AppReleaseService:
         self.tokens = DownloadTokenRepository(session)
         self.recipients = recipient_repository or AppReleaseRecipientRepository(session)
         self.storage_service = storage_service or GitHubReleaseStorageService()
-        self.email_service = email_service or SMTPEmailService()
+        self.email_service = email_service or FarmTrackEmailService()
 
     async def register_release(self, request: AppReleaseCreate) -> AppRelease:
         file_name, file_size = await self.storage_service.verify_asset(

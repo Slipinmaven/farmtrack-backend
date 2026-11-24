@@ -21,6 +21,7 @@ from app.repositories.block_repository import BlockRepository
 from app.core.logging import get_application_logger
 from app.core.defaults import DEFAULT_FARM_SETTINGS
 from app.models.user import User
+from app.models.farm_logo_cleanup_job import FarmLogoCleanupJob
 from app.schemas.enums import ActivityEntityType, ActivityType, ProductType
 from app.services.activity_service import ActivityService
 from app.services.activity_details import activity_field_changes
@@ -148,6 +149,9 @@ class FarmService:
                 farm.id
             )
             update_data = settings_data.model_dump(exclude_unset=True)
+            previous_logo_path = (
+                current_settings.logo_path if current_settings is not None else None
+            )
             before_values = {
                 field: getattr(current_settings, field)
                 for field in update_data
@@ -157,6 +161,14 @@ class FarmService:
                 farm.id,
                 settings_data,
             )
+            if (
+                "logo_path" in update_data
+                and previous_logo_path
+                and previous_logo_path != settings.logo_path
+            ):
+                self.unit_of_work.session.add(
+                    FarmLogoCleanupJob(logo_path=previous_logo_path)
+                )
             changes = activity_field_changes(
                 before_values,
                 {field: getattr(settings, field) for field in update_data},
@@ -184,15 +196,11 @@ class FarmService:
             )
             return response
 
-    async def delete_farm(self, farm: Farm) -> None:
+    async def enqueue_farm_logo_cleanup(self, logo_path: str) -> None:
         async with self.unit_of_work:
-            await self.farm_repository.delete(farm)
+            self.unit_of_work.session.add(FarmLogoCleanupJob(logo_path=logo_path))
             await self.unit_of_work.commit()
-            app_logger.info(
-                "farm_deleted",
-                extra={"event": "farm_deleted", "user_id": farm.owner_id, "farm_id": farm.id},
-            )
-    
+
     async def get_farm_with_settings(
         self,
         farm: Farm,
@@ -233,6 +241,11 @@ class FarmService:
                     else None
                 ),
             )
+
+    async def get_farm_logo_path(self, farm: Farm) -> str | None:
+        async with self.unit_of_work:
+            settings = await self.farm_settings_repository.get_farm_settings(farm.id)
+            return settings.logo_path if settings is not None else None
 
     async def create_farm(
         self,

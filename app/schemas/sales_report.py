@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, time
 from decimal import Decimal
 from typing import Literal
 from uuid import UUID
@@ -18,6 +18,7 @@ class SalesReportItem(BaseModel):
     id: UUID
     reference_number: str | None
     transaction_date: date
+    transaction_time: time | None = None
     status: TransactionStatus
     customer_name: str | None
     product_names: list[str]
@@ -139,6 +140,8 @@ class OutstandingBalanceSummary(BaseModel):
 class SalesReportFilters(BaseModel):
     from_date: date | None = None
     to_date: date | None = None
+    from_time: time | None = None
+    to_time: time | None = None
     category: ProductType | None = None
     status: Literal["all", "completed", "cancelled"] = "completed"
     search: str | None = None
@@ -151,4 +154,17 @@ class SalesReportFilters(BaseModel):
             and self.from_date > self.to_date
         ):
             raise ValueError("The start date must be on or before the end date.")
+        if (self.from_time is None) != (self.to_time is None):
+            raise ValueError("Time filters must include both from_time and to_time.")
+        if self.from_time is not None and (
+            self.from_date is None or self.to_date is None
+        ):
+            raise ValueError("Time filters require both date boundaries.")
+        if (
+            self.from_date == self.to_date
+            and self.from_time is not None
+            and self.to_time is not None
+            and self.from_time >= self.to_time
+        ):
+            raise ValueError("The start time must be before the end time.")
         return self

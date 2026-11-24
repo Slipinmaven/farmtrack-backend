@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Annotated, Literal
 from urllib.parse import urlsplit
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import Field, SecretStr, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
@@ -60,11 +60,9 @@ class Settings(BaseSettings):
     )
 
     # Email
-    smtp_host: str = "smtp.gmail.com"
-    smtp_port: int = Field(default=587, ge=1, le=65535)
-    smtp_username: str | None = None
-    smtp_password: SecretStr | None = None
-    smtp_from_email: str | None = None
+    email_gateway_url: str | None = None
+    email_gateway_secret: SecretStr | None = None
+    email_gateway_timeout_seconds: float = Field(default=15.0, gt=0, le=120)
     farmtrack_app_url: str = "farmtrack://farm-team"
     app_release_admin_emails: Annotated[list[str], NoDecode] = Field(
         default_factory=list
@@ -73,6 +71,12 @@ class Settings(BaseSettings):
     github_release_token: SecretStr | None = None
     app_public_base_url: str | None = None
     download_token_expiry_days: int = Field(default=7, ge=1, le=30)
+    groq_api_key: SecretStr | None = None
+    groq_model: str = "qwen/qwen3.8-27b"
+    gemini_api_key: SecretStr | None = None
+    gemini_model: str = "gemini-3-flash-preview"
+    openrouter_api_key: SecretStr | None = None
+    openrouter_model: str = "openrouter/free"
 
     # Logging
     log_level: str = "INFO"
@@ -171,6 +175,33 @@ class Settings(BaseSettings):
     def normalize_github_release_token(cls, value: object) -> object:
         return None if value == "" else value
 
+    @field_validator(
+        "groq_api_key",
+        "gemini_api_key",
+        "openrouter_api_key",
+        mode="before",
+    )
+    @classmethod
+    def normalize_ai_api_key(cls, value: object) -> object:
+        if isinstance(value, str):
+            normalized = value.strip()
+            return normalized or None
+        return value
+
+    @field_validator("groq_model", "gemini_model", "openrouter_model")
+    @classmethod
+    def validate_ai_model(cls, value: str, info: ValidationInfo) -> str:
+        normalized = value.strip()
+        field_name = info.field_name or "ai_model"
+        pattern = (
+            r"gemini-[A-Za-z0-9._-]{1,80}"
+            if field_name == "gemini_model"
+            else r"[A-Za-z0-9._:/-]{1,120}"
+        )
+        if re.fullmatch(pattern, normalized) is None:
+            raise ValueError(f"{field_name.upper()} must be a valid model name.")
+        return normalized
+
     @field_validator("app_public_base_url")
     @classmethod
     def validate_service_urls(cls, value: str | None) -> str | None:
@@ -195,31 +226,36 @@ class Settings(BaseSettings):
             raise ValueError("Service URLs must use HTTPS outside localhost.")
         return value
 
-    @field_validator("smtp_username", "smtp_from_email")
+    @field_validator("email_gateway_url")
     @classmethod
-    def normalize_smtp_email_address(cls, value: str | None) -> str | None:
+    def validate_email_gateway_url(cls, value: str | None) -> str | None:
         if value is None or not value.strip():
             return None
         normalized = value.strip()
-        if not normalized or "\r" in normalized or "\n" in normalized:
-            raise ValueError("SMTP email addresses must not contain line breaks.")
+        parsed = urlsplit(normalized)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.fragment
+        ):
+            raise ValueError("EMAIL_GATEWAY_URL must be a valid HTTP(S) URL.")
+        if parsed.scheme != "https" and parsed.hostname not in {
+            "localhost",
+            "127.0.0.1",
+            "::1",
+        }:
+            raise ValueError("EMAIL_GATEWAY_URL must use HTTPS outside localhost.")
         return normalized
 
-    @field_validator("smtp_password", mode="before")
+    @field_validator("email_gateway_secret", mode="before")
     @classmethod
-    def normalize_smtp_password(cls, value: object) -> object:
+    def normalize_email_gateway_secret(cls, value: object) -> object:
         return None if value == "" else value
 
     @model_validator(mode="after")
-    def validate_smtp_configuration(self) -> "Settings":
-        if (self.smtp_username is None) != (self.smtp_password is None):
-            raise ValueError(
-                "SMTP_USERNAME and SMTP_PASSWORD must be configured together."
-            )
-        if self.smtp_from_email is not None and self.smtp_username is None:
-            raise ValueError(
-                "SMTP_USERNAME and SMTP_PASSWORD are required when SMTP_FROM_EMAIL is set."
-            )
+    def validate_service_configuration(self) -> "Settings":
         if (self.github_release_repository is None) != (
             self.github_release_token is None
         ):

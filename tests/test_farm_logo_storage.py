@@ -28,6 +28,21 @@ def test_save_and_delete_farm_logo(tmp_path):
     assert not logo_file.parent.exists()
 
 
+def test_resolve_is_limited_to_the_farm_and_generated_files(tmp_path):
+    farm_id = uuid4()
+    other_farm_id = uuid4()
+    storage = FarmLogoStorage(tmp_path)
+    logo_path = storage.save(farm_id, "image/png", PNG_HEADER + b"image data")
+
+    resolved = storage.resolve(farm_id, logo_path)
+
+    assert resolved is not None
+    assert resolved[0].read_bytes() == PNG_HEADER + b"image data"
+    assert resolved[1] == "image/png"
+    assert storage.resolve(other_farm_id, logo_path) is None
+    assert storage.resolve(farm_id, "/media/farm-logos/../../outside.png") is None
+
+
 def test_rejects_unsupported_and_mislabeled_images(tmp_path):
     storage = FarmLogoStorage(tmp_path)
     farm_id = uuid4()

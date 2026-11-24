@@ -182,6 +182,10 @@ class FakeExpenseRepository:
 
     async def list_by_farm(self, farm_id, *, offset=0, limit=50, **filters):
         rows = [row for row in self.rows if row.farm_id == farm_id]
+        if filters.get("exclude_cancelled"):
+            rows = [row for row in rows if row.canceled_at is None]
+        if filters.get("exclude_purchase_linked"):
+            rows = [row for row in rows if row.purchase_transaction_id is None]
         category = filters.get("category")
         if category is not None:
             categories = set(category) if isinstance(category, list) else {category}
@@ -853,6 +857,40 @@ class ProductConsumptionExpenseServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(summary.balance_due, Decimal("60.00"))
         self.assertEqual(summary.categories[0].name, "Feed and nutrition")
 
+    async def test_active_expense_count_matches_summary_and_operating_scope(self):
+        for name, amount in (
+            ("Operating feed", "100.00"),
+            ("Cancelled repair", "200.00"),
+            ("Linked purchase", "300.00"),
+        ):
+            await self.expense_service.create_expense(
+                self.farm,
+                self._expense_request(
+                    name=name,
+                    amount=amount,
+                    initial_payment=None,
+                ),
+            )
+        self.expense_repository.rows[1].canceled_at = datetime.now(timezone.utc)
+        self.expense_repository.rows[2].purchase_transaction_id = uuid4()
+
+        summary = await self.expense_service.get_expense_summary(self.farm)
+        active = await self.expense_service.list_expenses(
+            self.farm,
+            exclude_cancelled=True,
+        )
+        operating = await self.expense_service.list_expenses(
+            self.farm,
+            exclude_cancelled=True,
+            exclude_purchase_linked=True,
+        )
+
+        self.assertEqual(summary.expense_count, active.total_count)
+        self.assertEqual(summary.expense_count, 2)
+        self.assertEqual(summary.total_amount, Decimal("400.00"))
+        self.assertEqual(operating.total_count, 1)
+        self.assertEqual(operating.items[0].name, "Operating feed")
+
     async def test_schemas_reject_nonpositive_consumption_and_expense(self):
         with self.assertRaises(ValidationError):
             self._consumption_request(quantity="0")
@@ -890,10 +928,14 @@ class ExpenseRepositoryTests(unittest.IsolatedAsyncioTestCase):
         await repository.list_by_farm(
             uuid4(),
             category=["feed_and_nutrition", "equipment"],
+            exclude_cancelled=True,
+            exclude_purchase_linked=True,
         )
 
         sql = str(session.statements[0].compile(dialect=postgresql.dialect()))
         self.assertIn("expenses.category IN", sql)
+        self.assertIn("expenses.canceled_at IS NULL", sql)
+        self.assertIn("expenses.purchase_transaction_id IS NULL", sql)
 
     def test_expense_response_uses_purchased_product_name(self):
         now = datetime.now(timezone.utc)

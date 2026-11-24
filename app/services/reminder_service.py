@@ -52,6 +52,8 @@ class ReminderService:
         self,
         farm: Farm,
         request: ReminderCreateRequest,
+        *,
+        created_by_user_id: UUID,
     ) -> ReminderResponse:
         if request.recurrence_rule is not None:
             raise ConflictError("Recurring reminders are not supported yet.")
@@ -78,6 +80,7 @@ class ReminderService:
             reminder = await self.repository.create(
                 farm.id,
                 {
+                    "created_by_user_id": created_by_user_id,
                     "title": request.title.strip(),
                     "description": request.description.strip()
                     if request.description
@@ -211,6 +214,7 @@ async def enqueue_due_reminder_notifications(
     for reminder in due_reminders:
         await outbox.enqueue(
             farm_id=reminder.farm_id,
+            created_by_user_id=getattr(reminder, "created_by_user_id", None),
             event_type="reminder.due",
             payload={
                 "reminder_id": str(reminder.id),
@@ -233,6 +237,7 @@ async def enqueue_due_reminder_notifications(
         if delivery_channel == "push" and expo_push_token:
             await outbox.enqueue(
                 farm_id=reminder.farm_id,
+                created_by_user_id=getattr(reminder, "created_by_user_id", None),
                 event_type="reminder.push",
                 payload={
                     "reminder_id": str(reminder.id),

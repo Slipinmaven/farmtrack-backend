@@ -34,6 +34,7 @@ from app.api.v1.endpoints import transaction_settlements
 from app.api.v1.endpoints import profitability_reports
 from app.api.v1.endpoints import receipt_history
 from app.api.v1.endpoints import app_releases
+from app.api.v1.endpoints import ai_assistant
 
 router = APIRouter()
 router.include_router(auth.router)
@@ -70,3 +71,4 @@ router.include_router(transaction_settlements.router)
 router.include_router(profitability_reports.router)
 router.include_router(receipt_history.router)
 router.include_router(app_releases.router)
+router.include_router(ai_assistant.router)

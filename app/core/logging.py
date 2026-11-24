@@ -35,6 +35,14 @@ class StructuredFormatter(logging.Formatter):
             "user_id",
             "farm_id",
             "error_code",
+            "provider",
+            "next_provider",
+            "reason",
+            "provider_error_code",
+            "provider_error_type",
+            "provider_error_param",
+            "cooldown_seconds",
+            "disabled",
         ):
             value = getattr(record, key, None)
             if value is not None:

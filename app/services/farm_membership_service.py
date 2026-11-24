@@ -14,9 +14,14 @@ from app.models.user import User
 from app.repositories.farm_membership_repository import FarmMembershipRepository
 from app.repositories.notification_outbox_repository import NotificationOutboxRepository
 from app.repositories.user_repository import UserRepository
-from app.schemas.enums import FarmInvitationEmailStatus, FarmMembershipStatus, FarmRole
+from app.schemas.enums import (
+    FarmInvitationEmailStatus,
+    FarmMembershipStatus,
+    FarmRole,
+    UserRole,
+)
 from app.services.auth_service import normalize_email
-from app.services.smtp_email_service import SMTPEmailService
+from app.services.email_gateway_service import FarmTrackEmailService
 
 logger = get_application_logger()
 
@@ -28,13 +33,13 @@ class FarmMembershipService:
         user_repository: UserRepository,
         unit_of_work: UnitOfWork,
         notification_outbox_repository: NotificationOutboxRepository | None = None,
-        email_service: SMTPEmailService | None = None,
+        email_service: FarmTrackEmailService | None = None,
     ):
         self.membership_repository = membership_repository
         self.user_repository = user_repository
         self.unit_of_work = unit_of_work
         self.notification_outbox_repository = notification_outbox_repository
-        self.email_service = email_service or SMTPEmailService()
+        self.email_service = email_service or FarmTrackEmailService()
 
     async def list_members(self, farm: Farm) -> list[FarmMembership]:
         async with self.unit_of_work:
@@ -78,6 +83,7 @@ class FarmMembershipService:
                     invited_user = User(
                         email=normalize_email(email),
                         password_hash=await hash_password_async(initial_password),
+                        role=UserRole.USER.value,
                         app_security_setting=AppSecuritySettings(),
                     )
                     await self.user_repository.create(invited_user)

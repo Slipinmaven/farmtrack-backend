@@ -296,3 +296,68 @@ async def test_purchase_payment_and_settlement_reduce_payable_to_zero():
         ("cash", "M-Pesa", Decimal("20.00")),
         ("service", "Veterinary visit", Decimal("50.00")),
     ]
+
+
+@pytest.mark.asyncio
+async def test_settlement_overpayment_and_underpayment_keep_signed_balances():
+    customer_id = uuid4()
+    customer_sale = create_transaction(
+        transaction_type=TransactionType.SALE,
+        transaction_date=date(2026, 11, 5),
+        contact_id=customer_id,
+        contact_name="Customer",
+        amount="100.00",
+        settlements=[
+            SimpleNamespace(
+                id=uuid4(),
+                direction="contact_to_farm",
+                total_value=Decimal("60.00"),
+                settlement_date=date(2026, 11, 6),
+                created_at=datetime(2026, 11, 6, 10, 0),
+                lines=[],
+            )
+        ],
+    )
+    customer_sale.contact.contact_roles = [
+        SimpleNamespace(role=SimpleNamespace(value="customer"))
+    ]
+
+    supplier_id = uuid4()
+    supplier_purchase = create_transaction(
+        transaction_type=TransactionType.PURCHASE,
+        transaction_date=date(2026, 11, 5),
+        contact_id=supplier_id,
+        contact_name="Supplier",
+        amount="100.00",
+        settlements=[
+            SimpleNamespace(
+                id=uuid4(),
+                direction="farm_to_contact",
+                total_value=Decimal("130.00"),
+                settlement_date=date(2026, 11, 6),
+                created_at=datetime(2026, 11, 6, 11, 0),
+                lines=[],
+            )
+        ],
+    )
+    supplier_purchase.contact.contact_roles = [
+        SimpleNamespace(role=SimpleNamespace(value="supplier"))
+    ]
+    service = AccountLedgerService(
+        FakeTransactionRepository([customer_sale, supplier_purchase]),
+        FakeUnitOfWork(),
+    )
+
+    result = await service.get_ledger(uuid4())
+
+    balances = {account.contact_name: account.balance for account in result.accounts}
+    assert balances == {
+        "Customer": Decimal("40.00"),
+        "Supplier": Decimal("30.00"),
+    }
+    assert sorted(event.amount for event in result.events) == sorted([
+        Decimal("100.00"),
+        Decimal("-100.00"),
+        Decimal("-60.00"),
+        Decimal("130.00"),
+    ])

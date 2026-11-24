@@ -155,6 +155,8 @@ class ExpenseService:
         search: str | None = None,
         payment_status: str | None = None,
         block_id: UUID | None = None,
+        exclude_cancelled: bool = False,
+        exclude_purchase_linked: bool = False,
         offset: int = 0,
         limit: int = 50,
     ) -> ExpenseListResponse:
@@ -172,6 +174,8 @@ class ExpenseService:
                 search=search,
                 payment_status=payment_status,
                 block_id=block_id,
+                exclude_cancelled=exclude_cancelled,
+                exclude_purchase_linked=exclude_purchase_linked,
                 offset=offset,
                 limit=limit,
             )

@@ -110,6 +110,7 @@ class ReminderServiceTests(unittest.TestCase):
 
     def test_local_due_time_is_converted_using_farm_timezone(self):
         farm = SimpleNamespace(id=uuid4())
+        creator_id = uuid4()
         repository = FakeReminderRepository()
         service = ReminderService(
             _as_any(repository),
@@ -126,10 +127,17 @@ class ReminderServiceTests(unittest.TestCase):
         with patch("app.services.reminder_service.datetime") as clock:
             clock.now.return_value = now
             clock.UTC = UTC
-            result = asyncio.run(service.create(_as_any(farm), request))
+            result = asyncio.run(
+                service.create(
+                    _as_any(farm),
+                    request,
+                    created_by_user_id=creator_id,
+                )
+            )
 
         self.assertEqual(result.due_at, datetime(2026, 10, 12, 19, 0, tzinfo=UTC))
         self.assertEqual(result.status, ReminderStatus.PENDING)
+        self.assertEqual(repository.reminders[0].created_by_user_id, creator_id)
 
     def test_push_reminder_requires_and_persists_a_valid_expo_token(self):
         farm = SimpleNamespace(id=uuid4())
@@ -147,7 +155,13 @@ class ReminderServiceTests(unittest.TestCase):
             expo_push_token="ExpoPushToken[device_token_123]",
         )
 
-        result = asyncio.run(service.create(_as_any(farm), request))
+        result = asyncio.run(
+            service.create(
+                _as_any(farm),
+                request,
+                created_by_user_id=uuid4(),
+            )
+        )
 
         self.assertEqual(result.delivery_channel, "push")
         self.assertEqual(repository.reminders[0].expo_push_token, request.expo_push_token)
@@ -165,7 +179,13 @@ class ReminderServiceTests(unittest.TestCase):
         )
 
         with self.assertRaisesRegex(ConflictError, "push token is required"):
-            asyncio.run(service.create(_as_any(SimpleNamespace(id=uuid4())), request))
+            asyncio.run(
+                service.create(
+                    _as_any(SimpleNamespace(id=uuid4())),
+                    request,
+                    created_by_user_id=uuid4(),
+                )
+            )
 
     def test_pending_reminder_can_be_rescheduled_in_farm_timezone(self):
         farm_id = uuid4()
@@ -289,12 +309,20 @@ class ReminderServiceTests(unittest.TestCase):
         )
 
         with self.assertRaises(ConflictError):
-            asyncio.run(service.create(_as_any(SimpleNamespace(id=uuid4())), request))
+            asyncio.run(
+                service.create(
+                    _as_any(SimpleNamespace(id=uuid4())),
+                    request,
+                    created_by_user_id=uuid4(),
+                )
+            )
 
     def test_due_reminder_outbox_key_is_stable(self):
+        creator_id = uuid4()
         reminder = SimpleNamespace(
             id=uuid4(),
             farm_id=uuid4(),
+            created_by_user_id=creator_id,
             title="Pay balance",
             description="Purchase PUR-20261012-0001",
             due_at=datetime(2026, 10, 12, 9, 0, tzinfo=UTC),
@@ -336,6 +364,7 @@ class ReminderServiceTests(unittest.TestCase):
 
         self.assertEqual(count, 1)
         self.assertEqual(queued[0]["event_type"], "reminder.due")
+        self.assertEqual(queued[0]["created_by_user_id"], creator_id)
         self.assertEqual(
             queued[0]["dedupe_key"],
             f"reminder-due:{reminder.id}:{reminder.due_at.isoformat()}",
@@ -344,9 +373,11 @@ class ReminderServiceTests(unittest.TestCase):
         self.assertEqual(session.commits, 1)
 
     def test_push_due_reminder_enqueues_in_app_and_push_events(self):
+        creator_id = uuid4()
         reminder = SimpleNamespace(
             id=uuid4(),
             farm_id=uuid4(),
+            created_by_user_id=creator_id,
             title="Pay balance",
             description="Purchase PUR-20261012-0001",
             due_at=datetime(2026, 10, 12, 9, 0, tzinfo=UTC),
@@ -387,6 +418,9 @@ class ReminderServiceTests(unittest.TestCase):
         self.assertEqual(
             [event["event_type"] for event in queued],
             ["reminder.due", "reminder.push"],
+        )
+        self.assertTrue(
+            all(event["created_by_user_id"] == creator_id for event in queued)
         )
         self.assertEqual(
             queued[1]["payload"]["expo_push_token"], reminder.expo_push_token

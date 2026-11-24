@@ -61,6 +61,8 @@ from app.models.inventory_opening_setup import InventoryOpeningSetup
 from app.models.egg_production_cost_confirmations import EggProductionCostConfirmation
 from app.models.app_release import AppRelease
 from app.models.download_token import DownloadToken
+from app.models.assistant_conversation import AssistantConversation, AssistantMessage
+from app.models.farm_logo_cleanup_job import FarmLogoCleanupJob
 
 __all__ = [
     "Base",
@@ -122,4 +124,7 @@ __all__ = [
     "EggProductionCostConfirmation",
     "AppRelease",
     "DownloadToken",
+    "AssistantConversation",
+    "AssistantMessage",
+    "FarmLogoCleanupJob",
 ]

@@ -181,7 +181,7 @@ class NotificationDispatcherTests(unittest.TestCase):
         async def send_invitation(**_kwargs):
             return None
 
-        dispatcher.smtp_email_service = SimpleNamespace(
+        dispatcher.email_service = SimpleNamespace(
             send_farm_invitation=send_invitation
         )
 
@@ -220,9 +220,9 @@ class NotificationDispatcherTests(unittest.TestCase):
         dispatcher.outbox_repository.claim_one = claim_one
 
         async def fail_sending(**_kwargs):
-            raise RuntimeError("Gmail SMTP unavailable")
+            raise RuntimeError("Email gateway unavailable")
 
-        dispatcher.smtp_email_service = SimpleNamespace(
+        dispatcher.email_service = SimpleNamespace(
             send_farm_invitation=fail_sending
         )
 

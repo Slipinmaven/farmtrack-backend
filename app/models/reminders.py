@@ -1,5 +1,4 @@
 from datetime import datetime
-from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
@@ -18,10 +17,6 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.database import Base
 from app.schemas.enums import ReminderStatus
-
-if TYPE_CHECKING:
-    from app.models.farm import Farm
-
 
 class Reminder(Base):
     __tablename__ = "reminders"
@@ -43,11 +38,15 @@ class Reminder(Base):
                     "status = 'PENDING' AND notification_enqueued_at IS NULL"
                 ),
             ),
+            Index("ix_reminders_created_by_user_id", "created_by_user_id"),
     )
 
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     farm_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("farms.id", ondelete="CASCADE"), nullable=False
+    )
+    created_by_user_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     title: Mapped[str] = mapped_column(String(160), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)

@@ -4,12 +4,13 @@ from uuid import UUID
 from fastapi import Depends, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt import PyJWTError
-from app.core.exceptions import AuthenticationError
+from app.core.exceptions import AuthenticationError, AuthorizationError
 from app.core.request_context import auth_session_id_context, auth_user_id_context
 from app.core.security import decode_access_token
 from app.presentation.dependencies.services import get_auth_service
 from app.models.user import User
 from app.services.auth_service import AuthService
+from app.schemas.enums import UserRole
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -44,3 +45,30 @@ async def get_current_user(
     finally:
         auth_user_id_context.reset(user_context_token)
         auth_session_id_context.reset(context_token)
+
+
+def require_account_not_pending_deletion(current_user: User) -> User:
+    if getattr(current_user, "deletion_requested_at", None) is not None:
+        raise AuthorizationError(
+            "Farm access is paused while account deletion is scheduled. "
+            "Cancel the deletion request from Account & access to use farms again."
+        )
+    return current_user
+
+
+async def require_active_account(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    return require_account_not_pending_deletion(current_user)
+
+
+async def require_super_admin(
+    current_user: User = Depends(get_current_user),
+) -> User:
+    require_account_not_pending_deletion(current_user)
+    if current_user.role != UserRole.SUPER_ADMIN.value:
+        raise AuthorizationError(
+            "FarmMate's tool-enabled AI features are not available yet. "
+            "They are currently in testing."
+        )
+    return current_user

@@ -44,12 +44,16 @@ class ReceiptHistoryServiceTests(unittest.IsolatedAsyncioTestCase):
             contact=SimpleNamespace(name="Customer One"),
             items=[
                 SimpleNamespace(
+                    quantity=Decimal("100"),
                     total_amount=Decimal("125.00"),
                     product=SimpleNamespace(name="Layers"),
+                    unit=SimpleNamespace(name="piece"),
                 ),
                 SimpleNamespace(
+                    quantity=Decimal("5"),
                     total_amount=Decimal("25.00"),
                     product=SimpleNamespace(name="Feed"),
+                    unit=SimpleNamespace(name="kg"),
                 ),
             ],
             payments=[
@@ -90,6 +94,16 @@ class ReceiptHistoryServiceTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result.completed_total, Decimal("150.00"))
         self.assertEqual(result.items[0].transaction_total, Decimal("150.00"))
         self.assertEqual(result.items[0].product_names, ["Feed", "Layers"])
+        self.assertEqual(
+            [
+                (item.product_name, item.quantity, item.unit_name)
+                for item in result.items[0].line_items
+            ],
+            [
+                ("Layers", Decimal("100"), "piece"),
+                ("Feed", Decimal("5"), "kg"),
+            ],
+        )
         self.assertEqual(result.items[0].payments[0].id, first_payment_id)
         self.assertEqual(result.items[0].payments[0].payment_number, 1)
         self.assertEqual(result.items[0].payments[1].payment_number, 2)

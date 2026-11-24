@@ -1,15 +1,17 @@
 import asyncio
 import unittest
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from pydantic import SecretStr, ValidationError
 
-from app.core.exceptions import DeviceBlockedError
+from app.core.exceptions import AccountDeletionPendingError, DeviceBlockedError
 from app.core.request_context import auth_session_id_context
 from app.core.security import decode_access_token, hash_device_id, hash_password
 from app.models.user import User
 from app.schemas.auth import DeviceBlockRequest, LoginRequest
 from app.schemas.enums import ActivityEntityType, ActivityType
+from app.schemas.enums import UserRole
 from app.services.auth_service import AuthService
 from app.services.activity_service import ActivityService
 
@@ -111,6 +113,7 @@ class LoginSessionBindingTests(unittest.TestCase):
             email="person@example.com",
             password_hash=hash_password("correct horse battery staple"),
             is_active=True,
+            role=UserRole.USER.value,
         )
 
         class UserRepo:
@@ -170,6 +173,7 @@ class LoginSessionBindingTests(unittest.TestCase):
         access_payload = decode_access_token(response.access_token)
         self.assertEqual(access_payload["sid"], str(session_repo.user_session.id))
         self.assertEqual(refresh_repo.token.session_id, session_repo.user_session.id)
+        self.assertEqual(response.user.role, UserRole.USER)
         self.assertEqual(
             session_repo.user_session.device_key,
             hash_device_id("installation-id-123456"),
@@ -177,12 +181,92 @@ class LoginSessionBindingTests(unittest.TestCase):
         self.assertEqual(session_repo.user_session.ip_address, "192.0.2.1")
         self.assertIsNotNone(user.last_login_at)
 
+    def test_login_rejects_pending_account_with_recovery_code(self):
+        user = User(
+            id=uuid4(),
+            email="person@example.com",
+            password_hash=hash_password("correct horse battery staple"),
+            is_active=True,
+            deletion_requested_at=datetime.now(UTC),
+            role=UserRole.USER.value,
+        )
+
+        class UserRepo:
+            async def get_by_email(self, _email):
+                return user
+
+        class UnitOfWork:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_args):
+                return None
+
+        auth_service = AuthService(
+            user_repository=UserRepo(),
+            refresh_token_repository=None,
+            user_session_repository=None,
+            unit_of_work=UnitOfWork(),
+        )
+
+        with self.assertRaises(AccountDeletionPendingError) as error:
+            asyncio.run(
+                auth_service.login_user(
+                    email=user.email,
+                    password=SecretStr("correct horse battery staple"),
+                    device_id="installation-id-123456",
+                )
+            )
+
+        self.assertEqual(error.exception.code, "ACCOUNT_DELETION_PENDING")
+
+    def test_revoked_refresh_token_for_pending_account_shows_recovery_path(self):
+        user = User(
+            id=uuid4(),
+            email="person@example.com",
+            password_hash=hash_password("correct horse battery staple"),
+            is_active=True,
+            deletion_requested_at=datetime.now(UTC),
+            role=UserRole.USER.value,
+        )
+        token = type(
+            "RefreshToken",
+            (),
+            {
+                "user_id": user.id,
+                "revoked_at": datetime.now(UTC),
+            },
+        )()
+
+        class UserRepo:
+            async def get_by_id(self, _user_id):
+                return user
+
+        class RefreshRepo:
+            async def get_by_hash(self, _token_hash):
+                return token
+
+        auth_service = AuthService(
+            user_repository=UserRepo(),
+            refresh_token_repository=RefreshRepo(),
+            user_session_repository=None,
+            unit_of_work=None,
+        )
+
+        with self.assertRaises(AccountDeletionPendingError) as error:
+            asyncio.run(
+                auth_service.refresh(SecretStr("revoked-token"))
+            )
+
+        self.assertEqual(error.exception.code, "ACCOUNT_DELETION_PENDING")
+
     def test_blocked_device_raises_dedicated_error_code(self):
         user = User(
             id=uuid4(),
             email="person@example.com",
             password_hash=hash_password("correct horse battery staple"),
             is_active=True,
+            role=UserRole.USER.value,
         )
 
         class UserRepo:

@@ -8,6 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.services.email_gateway_service import FarmTrackEmailService
 from app.core.logging import get_application_logger
 from app.models.farm import Farm
 from app.models.farm_membership import FarmMembership
@@ -17,17 +18,21 @@ from app.repositories.notification_outbox_repository import NotificationOutboxRe
 from app.repositories.notification_repository import NotificationRepository
 from app.schemas.enums import NotificationCategory, NotificationPriority
 from app.services.expo_push import send_expo_push_notification
-from app.services.smtp_email_service import SMTPEmailService
 
 logger = get_application_logger()
 
 
 class NotificationDispatcher:
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(
+        self,
+        session: AsyncSession,
+        *,
+        email_service: FarmTrackEmailService | None = None,
+    ) -> None:
         self.session = session
         self.outbox_repository = NotificationOutboxRepository(session)
         self.notification_repository = NotificationRepository(session)
-        self.smtp_email_service = SMTPEmailService()
+        self.email_service = email_service or FarmTrackEmailService()
 
     async def dispatch_once(self, *, max_attempts: int = 5) -> bool:
         event = await self.outbox_repository.claim_one()
@@ -117,7 +122,7 @@ class NotificationDispatcher:
             membership.invitation_email_status = "cancelled"
             return
 
-        await self.smtp_email_service.send_farm_invitation(
+        await self.email_service.send_farm_invitation(
             membership=membership,
             idempotency_key=outbox_id,
         )
@@ -300,8 +305,13 @@ class NotificationDispatcher:
         raise ValueError(f"Unsupported notification event type: {event_type}")
 
 
-async def process_pending_notifications(session: AsyncSession, *, batch_size: int = 20) -> int:
-    dispatcher = NotificationDispatcher(session)
+async def process_pending_notifications(
+    session: AsyncSession,
+    *,
+    batch_size: int = 20,
+    email_service: FarmTrackEmailService | None = None,
+) -> int:
+    dispatcher = NotificationDispatcher(session, email_service=email_service)
     processed = 0
     for _ in range(batch_size):
         if not await dispatcher.dispatch_once():

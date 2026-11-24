@@ -17,6 +17,15 @@ class AuthenticationError(AppError):
     def __init__(self, message: str = "Authentication failed."):
         super().__init__("AUTHENTICATION_FAILED", message, 401)
 
+class AccountDeletionPendingError(AppError):
+    def __init__(self):
+        super().__init__(
+            "ACCOUNT_DELETION_PENDING",
+            "This account has a pending deletion request. Restore the account "
+            "before signing in.",
+            401,
+        )
+
 
 class DeviceBlockedError(AppError):
     def __init__(self, message: str = "This device is blocked from signing in."):

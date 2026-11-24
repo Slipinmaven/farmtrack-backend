@@ -3,9 +3,11 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
 
+from app.dependencies.auth import get_current_user
 from app.dependencies.farm import get_owned_farm
-from app.presentation.dependencies.services import get_notification_service
 from app.models.farm import Farm
+from app.models.user import User
+from app.presentation.dependencies.services import get_notification_service
 from app.schemas.enums import NotificationCategory
 from app.schemas.notification import (
     NotificationListResponse,
@@ -24,6 +26,7 @@ router = APIRouter(
 @router.get("", response_model=NotificationListResponse)
 async def list_notifications(
     farm: Annotated[Farm, Depends(get_owned_farm)],
+    current_user: Annotated[User, Depends(get_current_user)],
     service: Annotated[NotificationService, Depends(get_notification_service)],
     unread_only: Annotated[bool, Query()] = False,
     category: Annotated[NotificationCategory | None, Query()] = None,
@@ -32,6 +35,7 @@ async def list_notifications(
 ) -> NotificationListResponse:
     return await service.list_notifications(
         farm,
+        recipient_user_id=current_user.id,
         limit=limit,
         cursor=cursor,
         unread_only=unread_only,
@@ -42,32 +46,50 @@ async def list_notifications(
 @router.get("/unread-count", response_model=NotificationUnreadCountResponse)
 async def get_unread_notification_count(
     farm: Annotated[Farm, Depends(get_owned_farm)],
+    current_user: Annotated[User, Depends(get_current_user)],
     service: Annotated[NotificationService, Depends(get_notification_service)],
 ) -> NotificationUnreadCountResponse:
-    return await service.unread_count(farm)
+    return await service.unread_count(
+        farm,
+        recipient_user_id=current_user.id,
+    )
 
 
 @router.patch("/read-all", response_model=NotificationMutationResponse)
 async def mark_all_notifications_read(
     farm: Annotated[Farm, Depends(get_owned_farm)],
+    current_user: Annotated[User, Depends(get_current_user)],
     service: Annotated[NotificationService, Depends(get_notification_service)],
 ) -> NotificationMutationResponse:
-    return await service.mark_all_read(farm)
+    return await service.mark_all_read(
+        farm,
+        recipient_user_id=current_user.id,
+    )
 
 
 @router.patch("/{notification_id}/read", response_model=NotificationResponse)
 async def mark_notification_read(
     notification_id: UUID,
     farm: Annotated[Farm, Depends(get_owned_farm)],
+    current_user: Annotated[User, Depends(get_current_user)],
     service: Annotated[NotificationService, Depends(get_notification_service)],
 ) -> NotificationResponse:
-    return await service.mark_read(farm, notification_id)
+    return await service.mark_read(
+        farm,
+        recipient_user_id=current_user.id,
+        notification_id=notification_id,
+    )
 
 
 @router.patch("/{notification_id}/archive", response_model=NotificationResponse)
 async def archive_notification(
     notification_id: UUID,
     farm: Annotated[Farm, Depends(get_owned_farm)],
+    current_user: Annotated[User, Depends(get_current_user)],
     service: Annotated[NotificationService, Depends(get_notification_service)],
 ) -> NotificationResponse:
-    return await service.archive(farm, notification_id)
+    return await service.archive(
+        farm,
+        recipient_user_id=current_user.id,
+        notification_id=notification_id,
+    )

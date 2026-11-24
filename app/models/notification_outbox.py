@@ -13,6 +13,7 @@ class NotificationOutbox(Base):
     __tablename__ = "notification_outbox"
     __table_args__ = (
         Index("ix_notification_outbox_farm_id", "farm_id"),
+        Index("ix_notification_outbox_created_by_user_id", "created_by_user_id"),
         Index(
             "ix_notification_outbox_pending_available_at",
             "available_at",
@@ -23,6 +24,9 @@ class NotificationOutbox(Base):
     id: Mapped[UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid4)
     farm_id: Mapped[UUID] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("farms.id", ondelete="CASCADE"), nullable=False
+    )
+    created_by_user_id: Mapped[UUID | None] = mapped_column(
+        Uuid(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     event_type: Mapped[str] = mapped_column(String(100), nullable=False)
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB, nullable=False)

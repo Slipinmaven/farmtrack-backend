@@ -1,4 +1,4 @@
-from fastapi import Depends
+from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_database_session
@@ -54,6 +54,9 @@ from app.repositories.expense_payment_repository import ExpensePaymentRepository
 from app.repositories.expense_category_repository import ExpenseCategoryRepository
 from app.repositories.product_consumption_repository import ProductConsumptionRepository
 from app.repositories.notification_repository import NotificationRepository
+from app.repositories.assistant_conversation_repository import (
+    AssistantConversationRepository,
+)
 from app.repositories.notification_outbox_repository import NotificationOutboxRepository
 from app.repositories.reminder_repository import ReminderRepository
 from app.repositories.batch_block_repository import BatchBlockRepository
@@ -66,6 +69,7 @@ from app.repositories.app_security_settings_repository import (
 from app.repositories.activity_repository import ActivityRepository
 from app.services.auth_service import AuthService
 from app.services.activity_service import ActivityService
+from app.services.email_gateway_service import FarmTrackEmailService
 from app.services.block_service import BlockService
 from app.services.contact_service import ContactService
 from app.services.contact_history_service import ContactHistoryService
@@ -111,6 +115,12 @@ from app.services.reminder_service import ReminderService
 from app.services.sales_report_service import SalesReportService
 from app.services.receipt_history_service import ReceiptHistoryService
 from app.services.profitability_report_service import ProfitabilityReportService
+from app.services.ai_assistant_service import FarmAssistantService
+from app.services.ai_provider_manager import (
+    AIProviderManager,
+    get_ai_provider_manager,
+)
+from app.services.data_deletion_service import DataDeletionService
 
 
 def get_unit_of_work(
@@ -135,8 +145,27 @@ def get_farm_repository(
     return FarmRepository(session=unit_of_work.session)
 
 
+def get_email_gateway_service(request: Request) -> FarmTrackEmailService:
+    return request.app.state.email_gateway_service
+
+
+def get_data_deletion_service(
+    unit_of_work: UnitOfWork = Depends(get_unit_of_work),
+    email_service: FarmTrackEmailService = Depends(get_email_gateway_service),
+) -> DataDeletionService:
+    session = unit_of_work.session
+    return DataDeletionService(
+        user_repository=UserRepository(session=session),
+        farm_repository=FarmRepository(session=session),
+        user_session_repository=UserSessionRepository(session=session),
+        refresh_token_repository=RefreshTokenRepository(session=session),
+        unit_of_work=unit_of_work,
+        email_service=email_service,
+    )
+
 def get_farm_membership_service(
     unit_of_work: UnitOfWork = Depends(get_unit_of_work),
+    email_service: FarmTrackEmailService = Depends(get_email_gateway_service),
 ) -> FarmMembershipService:
     session = unit_of_work.session
     return FarmMembershipService(
@@ -144,6 +173,7 @@ def get_farm_membership_service(
         user_repository=UserRepository(session),
         unit_of_work=unit_of_work,
         notification_outbox_repository=NotificationOutboxRepository(session),
+        email_service=email_service,
     )
 
 
@@ -828,4 +858,82 @@ def get_transaction_refund_service(
         sale_return_repository=SaleReturnRepository(session=session),
         unit_of_work=unit_of_work,
         activity_service=activity_service,
+    )
+
+
+def get_farm_assistant_service(
+    profitability_service: ProfitabilityReportService = Depends(
+        get_profitability_report_service
+    ),
+    account_ledger_service: AccountLedgerService = Depends(
+        get_account_ledger_service
+    ),
+    inventory_service: InventoryService = Depends(get_inventory_service),
+    sales_report_service: SalesReportService = Depends(get_sales_report_service),
+    purchase_history_service: ReceiptHistoryService = Depends(
+        get_receipt_history_service
+    ),
+    transaction_refund_service: TransactionRefundService = Depends(
+        get_transaction_refund_service
+    ),
+    sale_return_service: SaleReturnService = Depends(get_sale_return_service),
+    sale_delivery_service: SaleDeliveryService = Depends(get_sale_delivery_service),
+    chicken_purchase_details_service: ChickenPurchaseDetailsService = Depends(
+        get_chicken_purchase_details_service
+    ),
+    purchase_return_service: PurchaseReturnService = Depends(
+        get_purchase_return_service
+    ),
+    purchase_replacement_service: PurchaseReplacementService = Depends(
+        get_purchase_replacement_service
+    ),
+    purchase_supplier_refund_service: PurchaseSupplierRefundService = Depends(
+        get_purchase_supplier_refund_service
+    ),
+    expense_service: ExpenseService = Depends(get_expense_service),
+    block_service: BlockService = Depends(get_block_service),
+    product_service: ProductService = Depends(get_product_service),
+    chicken_loss_service: ChickenLossService = Depends(get_chicken_loss_service),
+    chicken_movement_service: ChickenMovementService = Depends(
+        get_chicken_movement_service
+    ),
+    egg_collection_service: EggCollectionService = Depends(
+        get_egg_collection_service
+    ),
+    egg_loss_service: EggLossService = Depends(get_egg_loss_service),
+    product_consumption_service: ProductConsumptionService = Depends(
+        get_product_consumption_service
+    ),
+    provider_manager: AIProviderManager = Depends(get_ai_provider_manager),
+    unit_of_work: UnitOfWork = Depends(get_unit_of_work),
+) -> FarmAssistantService:
+    return FarmAssistantService(
+        profitability_service,
+        account_ledger_service=account_ledger_service,
+        inventory_service=inventory_service,
+        sales_report_service=sales_report_service,
+        purchase_history_service=purchase_history_service,
+        transaction_repository=TransactionRepository(
+            session=unit_of_work.session
+        ),
+        sale_delivery_service=sale_delivery_service,
+        chicken_purchase_details_service=chicken_purchase_details_service,
+        transaction_refund_service=transaction_refund_service,
+        purchase_return_service=purchase_return_service,
+        purchase_replacement_service=purchase_replacement_service,
+        purchase_supplier_refund_service=purchase_supplier_refund_service,
+        sale_return_service=sale_return_service,
+        expense_service=expense_service,
+        block_service=block_service,
+        product_service=product_service,
+        chicken_loss_service=chicken_loss_service,
+        chicken_movement_service=chicken_movement_service,
+        egg_collection_service=egg_collection_service,
+        egg_loss_service=egg_loss_service,
+        product_consumption_service=product_consumption_service,
+        provider_manager=provider_manager,
+        conversation_repository=AssistantConversationRepository(
+            unit_of_work.session
+        ),
+        unit_of_work=unit_of_work,
     )

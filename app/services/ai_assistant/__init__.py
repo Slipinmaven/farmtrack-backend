@@ -1,0 +1,1 @@
+"""FarmMate assistant implementation modules."""

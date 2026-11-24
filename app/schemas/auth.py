@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import (
@@ -10,6 +11,8 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+
+from app.schemas.enums import UserRole
 
 
 class LoginRequest(BaseModel):
@@ -50,6 +53,7 @@ class UserResponse(BaseModel):
 
     id: UUID
     email: EmailStr
+    role: UserRole
 
 
 class AuthenticationResponse(BaseModel):
@@ -63,6 +67,27 @@ class AuthenticationResponse(BaseModel):
 class PasswordChangeRequest(BaseModel):
     current_password: SecretStr
     new_password: SecretStr = Field(min_length=12, max_length=256)
+
+
+class AccountDeletionRequest(BaseModel):
+    current_password: SecretStr
+
+
+class AccountRestoreRequest(BaseModel):
+    email: EmailStr
+    password: SecretStr
+
+
+class AccountDeletionResponse(BaseModel):
+    status: Literal["confirmation_pending", "scheduled"]
+    scheduled_for: datetime | None = None
+    notification_sent: bool
+
+
+class AccountDeletionStatusResponse(BaseModel):
+    status: Literal["none", "confirmation_pending", "scheduled"]
+    confirmation_expires_at: datetime | None = None
+    scheduled_for: datetime | None = None
 
 
 class DeviceBlockRequest(BaseModel):

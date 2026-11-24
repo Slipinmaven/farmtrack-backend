@@ -2,8 +2,11 @@ from uuid import UUID
 
 from fastapi import Depends
 
-from app.core.exceptions import AuthenticationError, AuthorizationError, ResourceNotFoundError
-from app.dependencies.auth import get_current_user
+from app.core.exceptions import AuthorizationError, ResourceNotFoundError
+from app.dependencies.auth import (
+    get_current_user,
+    require_account_not_pending_deletion,
+)
 from app.presentation.dependencies.services import get_farm_repository
 from app.models.farm import Farm
 from app.models.user import User
@@ -15,11 +18,9 @@ async def get_owned_farm(
     current_user: User = Depends(get_current_user),
     farm_repository: FarmRepository = Depends(get_farm_repository),
 ) -> Farm:
-    if not current_user.is_active:
-        raise AuthenticationError()
-
+    require_account_not_pending_deletion(current_user)
     farm = await farm_repository.get_by_id(farm_id)
-    if farm is None:
+    if farm is None or getattr(farm, "deletion_requested_at", None) is not None:
         raise ResourceNotFoundError("Farm not found.")
     if farm.owner_id != current_user.id:
         membership = await farm_repository.get_membership(farm.id, current_user.id)

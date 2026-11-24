@@ -17,6 +17,7 @@ class NotificationOutboxRepository:
         self,
         *,
         farm_id: UUID,
+        created_by_user_id: UUID | None = None,
         event_type: str,
         payload: dict[str, Any],
         dedupe_key: str,
@@ -25,6 +26,7 @@ class NotificationOutboxRepository:
             insert(NotificationOutbox)
             .values(
                 farm_id=farm_id,
+                created_by_user_id=created_by_user_id,
                 event_type=event_type,
                 payload=payload,
                 dedupe_key=dedupe_key,

@@ -33,6 +33,7 @@ class NotificationService:
         self,
         farm: Farm,
         *,
+        recipient_user_id: UUID,
         limit: int,
         cursor: str | None = None,
         unread_only: bool = False,
@@ -42,7 +43,7 @@ class NotificationService:
         async with self.unit_of_work:
             rows = await self.repository.list_for_recipient(
                 farm_id=farm.id,
-                recipient_user_id=farm.owner_id,
+                recipient_user_id=recipient_user_id,
                 limit=limit + 1,
                 cursor=decoded_cursor,
                 unread_only=unread_only,
@@ -59,23 +60,30 @@ class NotificationService:
                 next_cursor=next_cursor,
             )
 
-    async def unread_count(self, farm: Farm) -> NotificationUnreadCountResponse:
+    async def unread_count(
+        self,
+        farm: Farm,
+        *,
+        recipient_user_id: UUID,
+    ) -> NotificationUnreadCountResponse:
         async with self.unit_of_work:
             count = await self.repository.count_unread(
                 farm_id=farm.id,
-                recipient_user_id=farm.owner_id,
+                recipient_user_id=recipient_user_id,
             )
             return NotificationUnreadCountResponse(unread_count=count)
 
     async def mark_read(
         self,
         farm: Farm,
+        *,
+        recipient_user_id: UUID,
         notification_id: UUID,
     ) -> NotificationResponse:
         async with self.unit_of_work:
             notification = await self.repository.get_for_recipient(
                 farm_id=farm.id,
-                recipient_user_id=farm.owner_id,
+                recipient_user_id=recipient_user_id,
                 notification_id=notification_id,
                 for_update=True,
             )
@@ -90,11 +98,16 @@ class NotificationService:
                 from_attributes=True,
             )
 
-    async def mark_all_read(self, farm: Farm) -> NotificationMutationResponse:
+    async def mark_all_read(
+        self,
+        farm: Farm,
+        *,
+        recipient_user_id: UUID,
+    ) -> NotificationMutationResponse:
         async with self.unit_of_work:
             updated_count = await self.repository.mark_all_read(
                 farm_id=farm.id,
-                recipient_user_id=farm.owner_id,
+                recipient_user_id=recipient_user_id,
             )
             await self.unit_of_work.commit()
             return NotificationMutationResponse(updated_count=updated_count)
@@ -102,12 +115,14 @@ class NotificationService:
     async def archive(
         self,
         farm: Farm,
+        *,
+        recipient_user_id: UUID,
         notification_id: UUID,
     ) -> NotificationResponse:
         async with self.unit_of_work:
             notification = await self.repository.get_for_recipient(
                 farm_id=farm.id,
-                recipient_user_id=farm.owner_id,
+                recipient_user_id=recipient_user_id,
                 notification_id=notification_id,
                 for_update=True,
             )

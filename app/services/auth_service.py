@@ -2,21 +2,23 @@ from datetime import UTC, datetime, timedelta
 from uuid import UUID
 from pydantic import SecretStr
 
-from sqlalchemy.ext.asyncio import AsyncSession
-
 from app.core.logging import  get_security_logger
 from app.core.unit_of_work import UnitOfWork
 from app.core.security import (
     create_access_token,
     create_refresh_token,
-    decode_access_token,
     hash_device_id,
     hash_password_async,
     hash_refresh_token,
     verify_password,
 )
 from app.core.config import settings
-from app.core.exceptions import AuthenticationError, ConflictError, DeviceBlockedError
+from app.core.exceptions import (
+    AccountDeletionPendingError,
+    AuthenticationError,
+    ConflictError,
+    DeviceBlockedError,
+)
 from app.models.app_security_settings import AppSecuritySettings
 from app.models.refresh_token import RefreshToken
 from app.models.blocked_device import BlockedDevice
@@ -32,6 +34,7 @@ from app.schemas.auth import (
     UserResponse,
     UserSessionResponse,
 )
+from app.schemas.enums import UserRole
 
 
 security_logger = get_security_logger()
@@ -67,6 +70,7 @@ class AuthService:
             new_user = User(
                 email=normalized_email, 
                 password_hash=password_hash,
+                role=UserRole.USER.value,
                 app_security_setting=AppSecuritySettings(),
             )
             await self.user_repository.create(new_user)
@@ -93,6 +97,10 @@ class AuthService:
             if not verify_password(password.get_secret_value(), user.password_hash):
                 security_logger.warning(f"Invalid password attempt for email: {normalized_email}")
                 raise AuthenticationError("Invalid email or password.")
+            if not user.is_active:
+                raise AuthenticationError("Invalid email or password.")
+            if user.deletion_requested_at is not None:
+                raise AccountDeletionPendingError()
 
             now = datetime.now(UTC)
             device_key = hash_device_id(device_id)
@@ -152,24 +160,40 @@ class AuthService:
     ) -> AuthenticationResponse:
         now = datetime.now(UTC)
         old_token = await self.refresh_token_repository.get_by_hash(hash_refresh_token(raw_refresh_token.get_secret_value()))
-        if (
-            old_token is None
-            or old_token.revoked_at is not None
-            or self._is_expired(old_token.expires_at, now)
-        ):
+        if old_token is None:
             security_logger.warning(
                 "refresh_token_rejected",
-                extra={"event": "refresh_token_rejected", "user_id": getattr(old_token, "user_id", None)},
+                extra={"event": "refresh_token_rejected"},
             )
             raise AuthenticationError("Invalid refresh token.")
-
-        user = await self.user_repository.get_by_id(old_token.user_id)
-        if user is None or not user.is_active:
+        if old_token.revoked_at is not None:
+            user = await self.user_repository.get_by_id(old_token.user_id)
+            if user is not None and user.deletion_requested_at is not None:
+                raise AccountDeletionPendingError()
             security_logger.warning(
                 "refresh_token_rejected",
                 extra={"event": "refresh_token_rejected", "user_id": old_token.user_id},
             )
             raise AuthenticationError("Invalid refresh token.")
+        if self._is_expired(old_token.expires_at, now):
+            security_logger.warning(
+                "refresh_token_rejected",
+                extra={"event": "refresh_token_rejected", "user_id": old_token.user_id},
+            )
+            raise AuthenticationError("Invalid refresh token.")
+
+        user = await self.user_repository.get_by_id(old_token.user_id)
+        if (
+            user is None
+            or not user.is_active
+        ):
+            security_logger.warning(
+                "refresh_token_rejected",
+                extra={"event": "refresh_token_rejected", "user_id": old_token.user_id},
+            )
+            raise AuthenticationError("Invalid refresh token.")
+        if user.deletion_requested_at is not None:
+            raise AccountDeletionPendingError()
 
         user_session = None
         if old_token.session_id is None:
@@ -305,6 +329,8 @@ class AuthService:
                 },
             )
             raise AuthenticationError("Authentication failed.")
+        if user.deletion_requested_at is not None:
+            raise AccountDeletionPendingError()
 
         now = datetime.now(UTC)
         last_seen = user_session.last_seen_at

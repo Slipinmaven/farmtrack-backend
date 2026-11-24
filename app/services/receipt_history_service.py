@@ -5,6 +5,7 @@ from app.core.unit_of_work import UnitOfWork
 from app.repositories.transaction_repository import TransactionRepository
 from app.schemas.receipt_history import (
     ReceiptHistoryFilters,
+    ReceiptHistoryLineItem,
     ReceiptHistoryPayment,
     ReceiptHistoryResponse,
     ReceiptHistoryTransaction,
@@ -52,6 +53,14 @@ class ReceiptHistoryService:
                         {item.product.name for item in transaction.items},
                         key=str.casefold,
                     ),
+                    line_items=[
+                        ReceiptHistoryLineItem(
+                            product_name=item.product.name,
+                            quantity=item.quantity,
+                            unit_name=item.unit.name,
+                        )
+                        for item in transaction.items
+                    ],
                     transaction_total=sum(
                         (item.total_amount for item in transaction.items),
                         Decimal("0.00"),

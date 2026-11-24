@@ -77,6 +77,12 @@ class FarmMembership(Base):
         DateTime(timezone=True),
         nullable=True,
     )
+    account_deletion_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    account_deletion_previous_status: Mapped[str | None] = mapped_column(
+        String(20), nullable=True
+    )
     invitation_email_status: Mapped[str] = mapped_column(
         String(20),
         nullable=False,

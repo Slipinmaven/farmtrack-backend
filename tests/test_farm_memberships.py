@@ -30,7 +30,12 @@ class FakeFarmRepository:
 
 
 def make_user():
-    return SimpleNamespace(id=uuid4(), email="user@example.com", is_active=True)
+    return SimpleNamespace(
+        id=uuid4(),
+        email="user@example.com",
+        is_active=True,
+        deletion_requested_at=None,
+    )
 
 
 def make_farm(owner_id):
@@ -82,6 +87,17 @@ async def test_farm_owner_can_access_farm_without_membership_lookup():
     repository = FakeFarmRepository(farm, {})
 
     assert await get_owned_farm(farm.id, owner, repository) is farm
+
+
+@pytest.mark.asyncio
+async def test_user_with_scheduled_account_deletion_cannot_access_farm():
+    owner = make_user()
+    owner.deletion_requested_at = datetime.now(timezone.utc)
+    farm = make_farm(owner.id)
+    repository = FakeFarmRepository(farm, {})
+
+    with pytest.raises(AuthorizationError, match="Farm access is paused"):
+        await get_owned_farm(farm.id, owner, repository)
 
 
 @pytest.mark.asyncio
@@ -183,7 +199,7 @@ class FailingEmailService(ConfiguredEmailService):
 
     async def send_farm_invitation(self, **_kwargs):
         self.attempts += 1
-        raise RuntimeError("SMTP delivery failed")
+        raise RuntimeError("Email gateway delivery failed")
         return user
 
 

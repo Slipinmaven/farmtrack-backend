@@ -17,6 +17,12 @@ class ReceiptHistoryPayment(BaseModel):
     payment_method: PaymentMethod
 
 
+class ReceiptHistoryLineItem(BaseModel):
+    product_name: str
+    quantity: Decimal
+    unit_name: str
+
+
 class ReceiptHistoryTransaction(BaseModel):
     id: UUID
     transaction_type: TransactionType
@@ -25,6 +31,7 @@ class ReceiptHistoryTransaction(BaseModel):
     reference_number: str | None
     contact_name: str | None
     product_names: list[str]
+    line_items: list[ReceiptHistoryLineItem]
     transaction_total: Decimal
     payments: list[ReceiptHistoryPayment]
 

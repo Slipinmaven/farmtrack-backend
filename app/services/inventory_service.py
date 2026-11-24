@@ -97,6 +97,31 @@ class InventoryService:
                 ],
             )
 
+    async def get_balances(
+        self,
+        farm_id: UUID,
+    ) -> list[InventoryProductBalance]:
+        async with self.unit_of_work:
+            balances = await self.movement_repository.list_balances(farm_id)
+            return [
+                InventoryProductBalance(
+                    product_id=product_id,
+                    product_name=product_name,
+                    product_type=product_type,
+                    quantity=quantity,
+                    unit_name=unit_name,
+                    unit_abbreviation=unit_abbreviation,
+                )
+                for (
+                    product_id,
+                    product_name,
+                    product_type,
+                    quantity,
+                    unit_name,
+                    unit_abbreviation,
+                ) in balances
+            ]
+
     async def record_opening_balance(
         self,
         farm: Farm,

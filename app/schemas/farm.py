@@ -9,6 +9,8 @@ from pydantic import (
     ConfigDict,
     EmailStr,
     Field,
+    SecretStr,
+    ValidationInfo,
     field_validator,
     model_validator,
 )
@@ -27,12 +29,21 @@ class FarmResponse(BaseModel):
     maximum_chicken_capacity: int | None
     is_active: bool
     setup_completed_at: datetime | None = None
+    deletion_requested_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
     settings: FarmSettingsResponse | None = Field(
         default=None,
         validation_alias=AliasPath("farm_settings"),
     )
+
+
+class PendingFarmDeletionResponse(BaseModel):
+    id: UUID
+    name: str
+    deletion_requested_at: datetime
+    scheduled_for: datetime
+    notification_sent: bool | None = None
 
 class FarmCreateRequest(BaseModel): 
     name: str = Field(..., max_length=150)
@@ -97,6 +108,19 @@ class FarmSettingsUpdate(BaseModel):
         return self
 
 
+class FarmDeletionRequest(BaseModel):
+    current_password: SecretStr
+
+
+class FarmLeaveRequest(BaseModel):
+    current_password: SecretStr
+
+
+class FarmLeaveResponse(BaseModel):
+    member_email_sent: bool
+    owner_email_sent: bool
+
+
 class FarmSettingsResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -112,3 +136,17 @@ class FarmSettingsResponse(BaseModel):
     timezone: str | None
     created_at: datetime
     updated_at: datetime
+
+    @field_validator("logo_path", mode="before")
+    @classmethod
+    def expose_authenticated_logo_endpoint(
+        cls,
+        value: str | None,
+        info: ValidationInfo,
+    ) -> str | None:
+        if value is None:
+            return None
+        farm_id = info.data.get("farm_id")
+        if farm_id is None:
+            return value
+        return f"/api/v1/farms/{farm_id}/logo"

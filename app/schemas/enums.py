@@ -1,6 +1,11 @@
 from enum import StrEnum
 
 
+class UserRole(StrEnum):
+    USER = "USER"
+    SUPER_ADMIN = "SUPER_ADMIN"
+
+
 class ContactRoleEnum(StrEnum):
     CUSTOMER = "customer"
     SUPPLIER = "supplier"

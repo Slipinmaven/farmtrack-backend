@@ -4,8 +4,10 @@ from uuid import UUID
 from fastapi import APIRouter, Depends
 
 from app.dependencies.farm import get_owned_farm
+from app.dependencies.auth import get_current_user
 from app.presentation.dependencies.services import get_reminder_service
 from app.models.farm import Farm
+from app.models.user import User
 from app.schemas.enums import ReminderStatus
 from app.schemas.reminder import (
     ReminderCreateRequest,
@@ -30,9 +32,14 @@ async def list_reminders(
 async def create_reminder(
     request: ReminderCreateRequest,
     farm: Annotated[Farm, Depends(get_owned_farm)],
+    current_user: Annotated[User, Depends(get_current_user)],
     service: Annotated[ReminderService, Depends(get_reminder_service)],
 ) -> ReminderResponse:
-    return await service.create(farm, request)
+    return await service.create(
+        farm,
+        request,
+        created_by_user_id=current_user.id,
+    )
 
 
 @router.get("/{reminder_id}", response_model=ReminderResponse)

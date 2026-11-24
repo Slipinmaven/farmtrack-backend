@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, time
 from decimal import Decimal
 from typing import Any
 from uuid import UUID
@@ -193,6 +193,7 @@ class TransactionRepository:
             .options(
                 selectinload(Transaction.contact),
                 selectinload(Transaction.items).selectinload(TransactionItem.product),
+                selectinload(Transaction.items).selectinload(TransactionItem.unit),
                 selectinload(Transaction.payments),
             )
             .where(*page_filters)
@@ -278,6 +279,8 @@ class TransactionRepository:
         *,
         from_date: date | None,
         to_date: date | None,
+        from_time: time | None = None,
+        to_time: time | None = None,
         category: ProductType | None,
         status: TransactionStatus | None,
         search: str | None,
@@ -312,6 +315,28 @@ class TransactionRepository:
             scope_filters.append(Transaction.transaction_date >= from_date)
         if to_date is not None:
             scope_filters.append(Transaction.transaction_date <= to_date)
+        if from_time is not None or to_time is not None:
+            scope_filters.append(Transaction.transaction_time.is_not(None))
+        if from_date is not None and from_time is not None:
+            scope_filters.append(
+                or_(
+                    Transaction.transaction_date > from_date,
+                    and_(
+                        Transaction.transaction_date == from_date,
+                        Transaction.transaction_time >= from_time,
+                    ),
+                )
+            )
+        if to_date is not None and to_time is not None:
+            scope_filters.append(
+                or_(
+                    Transaction.transaction_date < to_date,
+                    and_(
+                        Transaction.transaction_date == to_date,
+                        Transaction.transaction_time < to_time,
+                    ),
+                )
+            )
         if category is not None:
             scope_filters.append(
                 select(TransactionItem.id)
